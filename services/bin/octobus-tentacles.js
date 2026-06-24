@@ -273,6 +273,10 @@ const services = {
     entryFile: "../qianxin__fw-secgate3600-http-x/bin/qianxin-fw-secgate3600-http-x.js",
     serviceModule: "../qianxin__fw-secgate3600-http-x/src/service.js",
   },
+  "qianxin-fw-secgate3600-v3-6-6": {
+    entryFile: "../qianxin__fw-secgate3600_v3-6-6/bin/qianxin-fw-secgate3600-v3-6-6.js",
+    serviceModule: "../qianxin__fw-secgate3600_v3-6-6/src/service.js",
+  },
   "qianxin-hunter": {
     entryFile: "../qianxin__hunter_v23-1/bin/qianxin-hunter.js",
     serviceModule: "../qianxin__hunter_v23-1/src/service.js",
