@@ -233,6 +233,10 @@ const services = {
     entryFile: "../m01__intelligence/bin/m01-intelligence.js",
     serviceModule: "../m01__intelligence/src/service.js",
   },
+  "nsfocus-ids-v5-6-r10-f02": {
+    entryFile: "../nsfocus__ids_v5-6-r10-f02/bin/nsfocus-ids-v5-6-r10-f02.js",
+    serviceModule: "../nsfocus__ids_v5-6-r10-f02/src/service.js",
+  },
   "nsfocus-ads-v4-5-r90-f06": {
     entryFile: "../nsfocus__ads_v4-5-r90-f06/bin/nsfocus-ads-v4-5-r90-f06.js",
     serviceModule: "../nsfocus__ads_v4-5-r90-f06/src/service.js",
