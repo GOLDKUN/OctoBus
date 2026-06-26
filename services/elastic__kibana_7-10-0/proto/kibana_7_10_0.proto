@@ -1,0 +1,137 @@
+syntax = "proto3";
+
+package Elastic_Kibana_7_10_0;
+
+option go_package = "miner/grpc-service/Elastic_Kibana_7_10_0";
+
+service Elastic_Kibana_7_10_0 {
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  rpc ListSpaces(ListSpacesRequest) returns (ListSpacesResponse);
+  rpc GetSpace(GetSpaceRequest) returns (SpaceInfo);
+  rpc FindSavedObjects(FindSavedObjectsRequest) returns (FindSavedObjectsResponse);
+  rpc GetSavedObject(GetSavedObjectRequest) returns (GetSavedObjectResponse);
+  rpc BulkGetSavedObjects(BulkGetSavedObjectsRequest) returns (BulkGetSavedObjectsResponse);
+  rpc ExportSavedObjects(ExportSavedObjectsRequest) returns (ExportSavedObjectsResponse);
+}
+
+message GetStatusRequest {}
+
+message StatusInfo {
+  string id = 1;
+  string state = 2;
+  string message = 3;
+  string level = 4;
+}
+
+message GetStatusResponse {
+  string name = 1;
+  string uuid = 2;
+  string version = 3;
+  string raw_body = 4;
+  repeated StatusInfo statuses = 5;
+}
+
+message ListSpacesRequest {}
+
+message SpaceInfo {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string color = 4;
+  repeated string disabled_features = 5;
+  string initials = 6;
+  string raw_json = 7;
+}
+
+message ListSpacesResponse {
+  repeated SpaceInfo spaces = 1;
+  string raw_body = 2;
+}
+
+message GetSpaceRequest {
+  string id = 1;
+}
+
+message FindSavedObjectsRequest {
+  string type = 1;
+  string search = 2;
+  string search_fields = 3;
+  int32 per_page = 4;
+  int32 page = 5;
+  repeated string fields = 6;
+  string sort_field = 7;
+  string sort_order = 8;
+  string space = 9;
+}
+
+message SavedObjectReference {
+  string name = 1;
+  string type = 2;
+  string id = 3;
+}
+
+message SavedObjectMeta {
+  string id = 1;
+  string type = 2;
+  string updated_at = 3;
+  string created_at = 4;
+  int32 version = 5;
+  string raw_json = 6;
+  repeated SavedObjectReference references = 7;
+}
+
+message FindSavedObjectsResponse {
+  repeated SavedObjectMeta saved_objects = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 per_page = 4;
+  string raw_body = 5;
+}
+
+message GetSavedObjectRequest {
+  string type = 1;
+  string id = 2;
+  string space = 3;
+}
+
+message GetSavedObjectResponse {
+  string id = 1;
+  string type = 2;
+  int32 version = 3;
+  string updated_at = 4;
+  string created_at = 5;
+  string attributes_json = 6;
+  repeated SavedObjectReference references = 7;
+  string raw_body = 8;
+  string migration_version = 9;
+  string core_migration_version = 10;
+}
+
+message BulkGetSavedObjectsRequest {
+  repeated SavedObjectRef objects = 1;
+  string space = 2;
+
+  message SavedObjectRef {
+    string type = 1;
+    string id = 2;
+  }
+}
+
+message BulkGetSavedObjectsResponse {
+  repeated GetSavedObjectResponse saved_objects = 1;
+  string raw_body = 2;
+}
+
+message ExportSavedObjectsRequest {
+  string type = 1;
+  repeated string objects = 2;
+  bool include_references_deep = 3;
+  string space = 4;
+}
+
+message ExportSavedObjectsResponse {
+  string ndjson = 1;
+  int32 total_count = 2;
+  int32 exported_count = 3;
+  repeated string missing_refs = 4;
+}
