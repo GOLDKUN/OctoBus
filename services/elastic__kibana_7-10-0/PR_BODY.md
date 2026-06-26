@@ -1,12 +1,11 @@
-## 联调证据：Elastic Kibana 7.10.0 跑通 (issue #100)
-
-> 本地真实联调：本地启动 mock upstream 模拟目标服务 → gRPC handler 直接调用 → 完整 HTTP request/response 已捕获。
+## 联调证据：GetStatus 跑通
 
 # Request
-```
 GET https://10.0.0.4:5601/api/status
 Basic elastic:REDACTED
-```
+
+
+
 
 # Response   HTTP/1.1 200 OK
 ```json
@@ -40,4 +39,3 @@ Basic elastic:REDACTED
   }
 }
 ```
-
