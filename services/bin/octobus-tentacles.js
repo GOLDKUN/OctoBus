@@ -284,6 +284,9 @@ const services = {
   "qianxin-vs-secvss3600": {
     entryFile: "../qianxin__vs-secvss3600/bin/qianxin-vs-secvss3600.js",
     serviceModule: "../qianxin__vs-secvss3600/src/service.js",
+  "qianxin-fw-secgate3600-policy": {
+    entryFile: "../qianxin__fw-secgate3600-policy/bin/qianxin-fw-secgate3600-policy.js",
+    serviceModule: "../qianxin__fw-secgate3600-policy/src/service.js",
   },
   "qiming-tianqing-waf": {
     entryFile: "../qiming-tianqing__waf/bin/qiming-tianqing-waf.js",
