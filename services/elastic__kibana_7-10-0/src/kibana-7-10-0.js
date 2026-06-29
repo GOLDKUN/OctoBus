@@ -183,6 +183,8 @@ const mapHttpStatusToCode = (httpStatus) => {
 const executeRequest = async (url, ctx = {}, options = {}) => {
   const bindings = ctx.bindings || {};
   const timeoutMs = resolveTimeoutMs(ctx);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const headers = { Accept: 'application/json', 'kbn-xsrf': 'octobus', ...(options.headers ?? {}) };
   const init = {
     method: options.method || 'GET',
