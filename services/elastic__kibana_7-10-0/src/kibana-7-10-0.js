@@ -1,4 +1,5 @@
 import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
+import { Agent } from 'undici';
 
 export const METHOD_GET_STATUS_FULL = 'Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetStatus';
 export const METHOD_LIST_SPACES_FULL = 'Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/ListSpaces';
