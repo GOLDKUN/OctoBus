@@ -20,6 +20,9 @@ const services = {
   "cloudatlas": {
     entryFile: "../chaitin__cloudatlas/bin/cloudatlas.js",
     serviceModule: "../chaitin__cloudatlas/src/service.js",
+  "aliyun-sas-vulnerability-management": {
+    entryFile: "../aliyun__sas-vulnerability-management/bin/aliyun-sas-vulnerability-management.js",
+    serviceModule: "../aliyun__sas-vulnerability-management/src/service.js",
   },
   "das-gateway-v3": {
     entryFile: "../das__gateway_v3/bin/das-gateway-v3.js",
