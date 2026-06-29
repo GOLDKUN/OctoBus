@@ -444,11 +444,15 @@ const handleExportSavedObjects = async (req = {}, ctx = {}) => {
   const body = result.httpBody || '';
   const lines = body.split('\n').filter((line) => line.trim());
   let exportedCount = 0;
+  let sawExportedCountField = false;
   const missingRefs = [];
   for (const line of lines) {
     const parsed = tryParseJson(line);
     if (!parsed.ok) continue;
-    if (parsed.value.exportedCount !== undefined) exportedCount = toFiniteInt(parsed.value.exportedCount);
+    if (parsed.value.exportedCount !== undefined) {
+      exportedCount = toFiniteInt(parsed.value.exportedCount);
+      sawExportedCountField = true;
+    }
     if (parsed.value.missingReferences) {
       for (const ref of parsed.value.missingReferences) {
         missingRefs.push(`${ref.type}:${ref.id}`);
@@ -459,7 +463,7 @@ const handleExportSavedObjects = async (req = {}, ctx = {}) => {
   return {
     ndjson: body,
     total_count: lines.length,
-    exported_count: exportedCount || lines.filter((l) => l.includes('"id"')).length,
+    exported_count: sawExportedCountField ? exportedCount : lines.filter((l) => l.includes('"id"')).length,
     missing_refs: missingRefs,
   };
 };
