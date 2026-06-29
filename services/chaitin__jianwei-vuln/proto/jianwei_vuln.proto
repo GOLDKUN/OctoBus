@@ -1,0 +1,869 @@
+syntax = "proto3";
+
+package jianwei.vuln.service;
+
+option go_package = "jianwei/vuln/service";
+
+// ============================================================
+// Shared / Common Messages
+// ============================================================
+
+message Pagination {
+  int64 count = 1 [json_name = "count"];
+  int64 offset = 2 [json_name = "offset"];
+}
+
+message OrderBy {
+  bool ascending = 1 [json_name = "ascending"];
+  string field = 2 [json_name = "field"];
+}
+
+message FilterOper {
+  string oper = 1 [json_name = "oper"];
+}
+
+message IntFilter {
+  string oper = 1 [json_name = "oper"];
+  int64 target = 2 [json_name = "target"];
+}
+
+message StringFilter {
+  string oper = 1 [json_name = "oper"];
+  string target = 2 [json_name = "target"];
+}
+
+message BoolFilter {
+  string oper = 1 [json_name = "oper"];
+  bool target = 2 [json_name = "target"];
+}
+
+message UserInfo {
+  int64 id = 1 [json_name = "id"];
+  string name = 2 [json_name = "name"];
+  string username = 3 [json_name = "username"];
+  string email = 4 [json_name = "email"];
+  string phone = 5 [json_name = "phone"];
+  repeated OrganizationInfo user_organizations = 6 [json_name = "user_organizations"];
+}
+
+message OrganizationInfo {
+  int64 id = 1 [json_name = "id"];
+  string name = 2 [json_name = "name"];
+  int64 superior_organization_id = 3 [json_name = "superior_organization_id"];
+}
+
+message ScopeInfo {
+  int64 id = 1 [json_name = "id"];
+  string name = 2 [json_name = "name"];
+  string full_name = 3 [json_name = "full_name"];
+  bool no_link = 4 [json_name = "no_link"];
+}
+
+message BusinessInfo {
+  int64 id = 1 [json_name = "id"];
+  string name = 2 [json_name = "name"];
+  string full_name = 3 [json_name = "full_name"];
+  bool no_link = 4 [json_name = "no_link"];
+}
+
+message AssetTagInfo {
+  int64 id = 1 [json_name = "id"];
+  string tag_name = 2 [json_name = "tag_name"];
+  string color = 3 [json_name = "color"];
+}
+
+message FindBySource {
+  int64 asset_id = 1 [json_name = "asset_id"];
+  int64 source_id = 2 [json_name = "source_id"];
+  string source_name = 3 [json_name = "source_name"];
+  string source_type = 4 [json_name = "source_type"];
+}
+
+message DisposeUserInfo {
+  int64 id = 1 [json_name = "id"];
+  string name = 2 [json_name = "name"];
+  string username = 3 [json_name = "username"];
+  bool no_link = 4 [json_name = "no_link"];
+}
+
+message AffectedProduct {
+  string name = 1 [json_name = "name"];
+  string alias = 2 [json_name = "alias"];
+  string category = 3 [json_name = "category"];
+  string category_cn = 4 [json_name = "category_cn"];
+  string cpe = 5 [json_name = "cpe"];
+  string description = 6 [json_name = "description"];
+}
+
+message Empty {}
+
+// ============================================================
+// AssetService
+// ============================================================
+
+service AssetService {
+  rpc ListAssets(ListAssetsRequest) returns (ListAssetsResponse);
+  rpc GetAsset(GetAssetRequest) returns (GetAssetResponse);
+  rpc UpdateAsset(UpdateAssetRequest) returns (UpdateAssetResponse);
+  rpc BatchUpdateAssets(BatchUpdateAssetsRequest) returns (BatchUpdateAssetsResponse);
+}
+
+// --- Asset messages ---
+
+message AssetFilter {
+  repeated IntFilter id = 1 [json_name = "id"];
+  repeated IntFilter asset_state = 2 [json_name = "asset_state"];
+  repeated IntFilter asset_risk_level = 3 [json_name = "asset_risk_level"];
+  repeated StringFilter asset_risk = 4 [json_name = "asset_risk"];
+  repeated BoolFilter auto_update = 5 [json_name = "auto_update"];
+  repeated IntFilter business_id = 6 [json_name = "business_id"];
+  repeated IntFilter business_owner_id = 7 [json_name = "business_owner_id"];
+  repeated StringFilter created_at = 8 [json_name = "created_at"];
+  repeated IntFilter created_by = 9 [json_name = "created_by"];
+  repeated StringFilter description = 10 [json_name = "description"];
+  repeated BoolFilter external = 11 [json_name = "external"];
+  repeated StringFilter find_at = 12 [json_name = "find_at"];
+  repeated IntFilter grade_lv = 13 [json_name = "grade_lv"];
+  repeated IntFilter importance = 14 [json_name = "importance"];
+  repeated StringFilter last_survival_at = 15 [json_name = "last_survival_at"];
+  repeated IntFilter owner_id = 16 [json_name = "owner_id"];
+  repeated IntFilter organization_id = 17 [json_name = "organization_id"];
+  repeated IntFilter scope_id = 18 [json_name = "scope_id"];
+  repeated StringFilter ip = 19 [json_name = "ip"];
+  repeated StringFilter name = 20 [json_name = "name"];
+  repeated IntFilter online_status = 21 [json_name = "online_status"];
+  repeated StringFilter port = 22 [json_name = "port"];
+  repeated BoolFilter internet_exposure = 23 [json_name = "internet_exposure"];
+}
+
+message AssetUpdateData {
+  int64 asset_state = 1 [json_name = "asset_state"];
+  bool auto_update = 2 [json_name = "auto_update"];
+  repeated int64 business_id = 3 [json_name = "business_id"];
+  string description = 4 [json_name = "description"];
+  repeated int64 extra_owner_ids = 5 [json_name = "extra_owner_ids"];
+  int64 organization_id = 6 [json_name = "organization_id"];
+  int64 owner_id = 7 [json_name = "owner_id"];
+  int64 scope_id = 8 [json_name = "scope_id"];
+  repeated string tags = 9 [json_name = "tags"];
+}
+
+message AssetDetail {
+  int64 id = 1 [json_name = "id"];
+  string ip = 2 [json_name = "ip"];
+  string name = 3 [json_name = "name"];
+  int64 asset_state = 4 [json_name = "asset_state"];
+  string asset_risk = 5 [json_name = "asset_risk"];
+  int64 asset_risk_level = 6 [json_name = "asset_risk_level"];
+  bool auto_update = 7 [json_name = "auto_update"];
+  repeated BusinessInfo business = 8 [json_name = "business"];
+  repeated int64 business_id = 9 [json_name = "business_id"];
+  UserInfo business_owner = 10 [json_name = "business_owner"];
+  int64 business_owner_id = 11 [json_name = "business_owner_id"];
+  string created_at = 12 [json_name = "created_at"];
+  int64 created_by = 13 [json_name = "created_by"];
+  string description = 14 [json_name = "description"];
+  bool draft = 15 [json_name = "draft"];
+  bool external = 16 [json_name = "external"];
+  repeated UserInfo extra_owners = 17 [json_name = "extra_owners"];
+  repeated int64 extra_owner_ids = 18 [json_name = "extra_owner_ids"];
+  string find_at = 19 [json_name = "find_at"];
+  repeated FindBySource find_by_source = 20 [json_name = "find_by_source"];
+  int64 grade_lv = 21 [json_name = "grade_lv"];
+  int64 importance = 22 [json_name = "importance"];
+  bool internet_exposure = 23 [json_name = "internet_exposure"];
+  string last_survival_at = 24 [json_name = "last_survival_at"];
+  string method = 25 [json_name = "method"];
+  int64 online_status = 26 [json_name = "online_status"];
+  UserInfo owner = 27 [json_name = "owner"];
+  int64 owner_id = 28 [json_name = "owner_id"];
+  OrganizationInfo organization = 29 [json_name = "organization"];
+  int64 organization_id = 30 [json_name = "organization_id"];
+  ScopeInfo scope = 31 [json_name = "scope"];
+  int64 scope_id = 32 [json_name = "scope_id"];
+  repeated AssetTagInfo asset_tags = 33 [json_name = "asset_tags"];
+  string port = 34 [json_name = "port"];
+}
+
+message ListAssetsRequest {
+  int64 count = 1 [json_name = "count"];
+  int64 offset = 2 [json_name = "offset"];
+  repeated OrderBy order_by = 3 [json_name = "orderBy"];
+  AssetFilter filter = 4 [json_name = "filter"];
+}
+
+message ListAssetsResponse {
+  int64 total = 1 [json_name = "total"];
+  repeated AssetDetail data = 2 [json_name = "data"];
+}
+
+message GetAssetRequest {
+  int64 id = 1 [json_name = "id"];
+  int64 workflow_id = 2 [json_name = "workflow_id"];
+}
+
+message GetAssetResponse {
+  AssetDetail data = 1 [json_name = "data"];
+}
+
+message UpdateAssetRequest {
+  int64 id = 1 [json_name = "id"];
+  AssetUpdateData data = 2 [json_name = "data"];
+  bool update_empty_col = 3 [json_name = "update_empty_col"];
+}
+
+message UpdateAssetResponse {
+  AssetDetail data = 1 [json_name = "data"];
+}
+
+message BatchUpdateAssetsRequest {
+  repeated int64 asset_ids = 1 [json_name = "asset_ids"];
+  AssetUpdateData data = 2 [json_name = "data"];
+  bool cascade_vuln = 3 [json_name = "cascade_vuln"];
+  int64 conflict_strategy = 4 [json_name = "conflict_strategy"];
+  bool update_empty_col = 5 [json_name = "update_empty_col"];
+}
+
+message BatchUpdateAssetsResponse {
+  repeated int64 duplicated = 1 [json_name = "duplicated"];
+}
+
+// ============================================================
+// VulnerabilityService
+// ============================================================
+
+service VulnerabilityService {
+  rpc ListIpVulnerabilities(ListIpVulnsRequest) returns (ListIpVulnsResponse);
+  rpc ListWebVulnerabilities(ListWebVulnsRequest) returns (ListWebVulnsResponse);
+  rpc GetVulnerabilityDetails(GetVulnDetailsRequest) returns (GetVulnDetailsResponse);
+  rpc UpdateVulnerabilityStatus(UpdateVulnStatusRequest) returns (UpdateVulnStatusResponse);
+}
+
+// --- Vulnerability messages ---
+
+message VulnIpFilter {
+  repeated IntFilter id = 1 [json_name = "id"];
+  repeated IntFilter check_type = 2 [json_name = "check_type"];
+  repeated StringFilter ct_id = 3 [json_name = "ct_id"];
+  repeated StringFilter cve = 4 [json_name = "cve"];
+  repeated IntFilter manager_id = 5 [json_name = "manager_id"];
+  repeated StringFilter dispose_fix_time = 6 [json_name = "dispose_fix_time"];
+  repeated StringFilter fix_remarks = 7 [json_name = "fix_remarks"];
+  repeated StringFilter find_by = 8 [json_name = "find_by"];
+  repeated IntFilter merge_num = 9 [json_name = "merge_num"];
+  repeated IntFilter severity = 10 [json_name = "severity"];
+  repeated IntFilter vuln_status = 11 [json_name = "vuln_status"];
+  repeated StringFilter customize_tag_name = 12 [json_name = "customize_tag_name"];
+  repeated StringFilter ip = 13 [json_name = "ip"];
+  repeated IntFilter asset_state = 14 [json_name = "asset_state"];
+  repeated StringFilter asset_risk = 15 [json_name = "asset_risk"];
+  repeated IntFilter asset_id = 16 [json_name = "asset_id"];
+  repeated BoolFilter is_poc_null = 17 [json_name = "is_poc_null"];
+  repeated BoolFilter is_reoccurrence = 18 [json_name = "is_reoccurrence"];
+}
+
+message VulnWebFilter {
+  repeated IntFilter id = 1 [json_name = "id"];
+  repeated IntFilter check_type = 2 [json_name = "check_type"];
+  repeated StringFilter ct_id = 3 [json_name = "ct_id"];
+  repeated StringFilter cve = 4 [json_name = "cve"];
+  repeated IntFilter manager_id = 5 [json_name = "manager_id"];
+  repeated StringFilter dispose_fix_time = 6 [json_name = "dispose_fix_time"];
+  repeated StringFilter fix_remarks = 7 [json_name = "fix_remarks"];
+  repeated StringFilter find_by = 8 [json_name = "find_by"];
+  repeated IntFilter merge_num = 9 [json_name = "merge_num"];
+  repeated IntFilter severity = 10 [json_name = "severity"];
+  repeated IntFilter vuln_status = 11 [json_name = "vuln_status"];
+  repeated StringFilter customize_tag_name = 12 [json_name = "customize_tag_name"];
+  repeated BoolFilter is_match_vuln = 13 [json_name = "is_match_vuln"];
+  repeated BoolFilter is_poc_null = 14 [json_name = "is_poc_null"];
+  repeated BoolFilter is_reoccurrence = 15 [json_name = "is_reoccurrence"];
+}
+
+message VulnDetailData {
+  int64 id = 1 [json_name = "id"];
+  string cve = 2 [json_name = "cve"];
+  string cve_id = 3 [json_name = "cve_id"];
+  string ct_id = 4 [json_name = "ct_id"];
+  string cncve = 5 [json_name = "cncve"];
+  string cnnvd = 6 [json_name = "cnnvd"];
+  string cnvd = 7 [json_name = "cnvd"];
+  string cwe = 8 [json_name = "cwe"];
+  string bugtraq_id = 9 [json_name = "bugtraq_id"];
+  string cpe = 10 [json_name = "cpe"];
+  float cvss = 11 [json_name = "cvss"];
+  string cvss_vector = 12 [json_name = "cvss_vector"];
+  string cvss3 = 13 [json_name = "cvss3"];
+  float cvss3_score = 14 [json_name = "cvss3_score"];
+  int64 check_type = 15 [json_name = "check_type"];
+  float definiteness = 16 [json_name = "definiteness"];
+  string affected_scope = 17 [json_name = "affected_scope"];
+  string affected_scope_cn = 18 [json_name = "affected_scope_cn"];
+  string attack_vector = 19 [json_name = "attack_vector"];
+  string attack_complexity = 20 [json_name = "attack_complexity"];
+  string confidentiality_impact = 21 [json_name = "confidentiality_impact"];
+  string availability_Impact = 22 [json_name = "availability_Impact"];
+  int64 exploit_complexity = 23 [json_name = "exploit_complexity"];
+  string exploit_complexity_cn = 24 [json_name = "exploit_complexity_cn"];
+  int64 exploit_difficulty = 25 [json_name = "exploit_difficulty"];
+  string exploit_difficulty_cn = 26 [json_name = "exploit_difficulty_cn"];
+  int64 degree_of_secrecy = 27 [json_name = "degree_of_secrecy"];
+  string degree_of_secrecy_cn = 28 [json_name = "degree_of_secrecy_cn"];
+  string exp = 29 [json_name = "exp"];
+  string disclosure_date = 30 [json_name = "disclosure_date"];
+  string created_at = 31 [json_name = "created_at"];
+  repeated string customize_tag_names = 32 [json_name = "customize_tag_names"];
+  repeated AffectedProduct affected_products = 33 [json_name = "affected_products"];
+  repeated DisposeUserInfo dispose_by = 34 [json_name = "dispose_by"];
+  int64 severity = 35 [json_name = "severity"];
+  int64 vuln_status = 36 [json_name = "vuln_status"];
+  string fix_remarks = 37 [json_name = "fix_remarks"];
+  int64 manager_id = 38 [json_name = "manager_id"];
+  string manager_name = 39 [json_name = "manager_name"];
+}
+
+message ListIpVulnsRequest {
+  int64 count = 1 [json_name = "count"];
+  int64 offset = 2 [json_name = "offset"];
+  repeated OrderBy order_by = 3 [json_name = "orderBy"];
+  VulnIpFilter filter = 4 [json_name = "filter"];
+}
+
+message ListIpVulnsResponse {
+  int64 total = 1 [json_name = "total"];
+  repeated VulnDetailData data = 2 [json_name = "data"];
+}
+
+message ListWebVulnsRequest {
+  int64 count = 1 [json_name = "count"];
+  int64 offset = 2 [json_name = "offset"];
+  repeated OrderBy order_by = 3 [json_name = "orderBy"];
+  VulnWebFilter filter = 4 [json_name = "filter"];
+}
+
+message ListWebVulnsResponse {
+  int64 total = 1 [json_name = "total"];
+  repeated VulnDetailData data = 2 [json_name = "data"];
+}
+
+message GetVulnDetailsRequest {
+  int64 vuln_id = 1 [json_name = "vuln_id"];
+  string workflow_id = 2 [json_name = "workflow_id"];
+}
+
+message GetVulnDetailsResponse {
+  VulnDetailData data = 1 [json_name = "data"];
+}
+
+message UpdateVulnStatusRequest {
+  repeated int64 vuln_ids = 1 [json_name = "vuln_ids"];
+  int64 vuln_status = 2 [json_name = "vuln_status"];
+  string vuln_type = 3 [json_name = "vuln_type"];
+  repeated string fix_remarks = 4 [json_name = "fix_remarks"];
+  string remark = 5 [json_name = "remark"];
+  string workflow_id = 6 [json_name = "workflow_id"];
+  bool skip_end_status = 7 [json_name = "skip_end_status"];
+  int64 exposure_exec_id = 8 [json_name = "exposure_exec_id"];
+  repeated int64 exposure_result_id = 9 [json_name = "exposure_result_id"];
+}
+
+message UpdateVulnStatusResponse {}
+
+// ============================================================
+// DisposalService
+// ============================================================
+
+service DisposalService {
+  rpc DirectVulnDispose(DirectVulnDisposeRequest) returns (DirectVulnDisposeResponse);
+  rpc VulnDisposeHistory(VulnDisposeHistoryRequest) returns (VulnDisposeHistoryResponse);
+  rpc SaveVulnWorkflowStatus(SaveVulnWorkflowStatusRequest) returns (SaveVulnWorkflowStatusResponse);
+}
+
+message DirectVulnDisposeRequest {
+  repeated int64 vuln_ids = 1 [json_name = "vuln_ids"];
+  int64 vuln_status = 2 [json_name = "vuln_status"];
+  string vuln_type = 3 [json_name = "vuln_type"];
+  repeated string fix_remarks = 4 [json_name = "fix_remarks"];
+  string remark = 5 [json_name = "remark"];
+  string workflow_id = 6 [json_name = "workflow_id"];
+  bool skip_end_status = 7 [json_name = "skip_end_status"];
+  int64 exposure_exec_id = 8 [json_name = "exposure_exec_id"];
+  repeated int64 exposure_result_id = 9 [json_name = "exposure_result_id"];
+}
+
+message DirectVulnDisposeResponse {}
+
+message VulnDisposeHistoryRequest {
+  int64 vuln_id = 1 [json_name = "vuln_id"];
+  string vuln_type = 2 [json_name = "vuln_type"];
+}
+
+message DisposeDetail {
+  string dispose_audit_ip = 1 [json_name = "dispose_audit_ip"];
+  string dispose_order = 2 [json_name = "dispose_order"];
+  string email_content = 3 [json_name = "email_content"];
+  string email_title = 4 [json_name = "email_title"];
+  repeated string emails = 5 [json_name = "emails"];
+  int64 exposure_exec_id = 6 [json_name = "exposure_exec_id"];
+  repeated int64 exposure_result_id = 7 [json_name = "exposure_result_id"];
+  repeated string fix_remarks = 8 [json_name = "fix_remarks"];
+  repeated int64 receive_user = 9 [json_name = "receive_user"];
+  string remark = 10 [json_name = "remark"];
+  int64 vuln_status = 11 [json_name = "vuln_status"];
+}
+
+message VulnDisposeRecord {
+  string created_at = 1 [json_name = "created_at"];
+  DisposeDetail dispose_detail = 2 [json_name = "dispose_detail"];
+  int64 vuln_id = 3 [json_name = "vuln_id"];
+  UserInfo dispose_user = 4 [json_name = "dispose_user"];
+}
+
+message VulnDisposeHistoryResponse {
+  repeated VulnDisposeRecord vuln_dispose_record = 1 [json_name = "vuln_dispose_record"];
+}
+
+message SaveVulnWorkflowStatusRequest {
+  string vuln_type = 1 [json_name = "vuln_type"];
+  map<string, VulnIdList> status_map = 2 [json_name = "status_map"];
+}
+
+message VulnIdList {
+  repeated int64 ids = 1 [json_name = "ids"];
+}
+
+message SaveVulnWorkflowStatusResponse {}
+
+// ============================================================
+// IntelligenceService
+// ============================================================
+
+service IntelligenceService {
+  rpc GetIPIntelligenceList(GetIPIntelligenceListRequest) returns (GetIPIntelligenceListResponse);
+  rpc GetIPIntelligenceDetail(GetIPIntelligenceDetailRequest) returns (GetIPIntelligenceDetailResponse);
+  rpc GetDomainIntelligenceList(GetDomainIntelligenceListRequest) returns (GetDomainIntelligenceListResponse);
+  rpc GetDomainIntelligenceDetail(GetDomainIntelligenceDetailRequest) returns (GetDomainIntelligenceDetailResponse);
+}
+
+// --- Intelligence messages ---
+
+message IPIntelligenceFilter {
+  repeated IntFilter id = 1 [json_name = "id"];
+  repeated StringFilter ip = 2 [json_name = "ip"];
+  repeated BoolFilter is_malicious = 3 [json_name = "is_malicious"];
+  repeated StringFilter confidence_level = 4 [json_name = "confidence_level"];
+  repeated StringFilter severity = 5 [json_name = "severity"];
+  repeated StringFilter judgments = 6 [json_name = "judgments"];
+  repeated StringFilter tags_classes = 7 [json_name = "tags_classes"];
+  repeated IntFilter organization_id = 8 [json_name = "organization_id"];
+  repeated IntFilter scope_id = 9 [json_name = "scope_id"];
+  repeated StringFilter carrier = 10 [json_name = "carrier"];
+  repeated StringFilter country = 11 [json_name = "country"];
+  repeated StringFilter country_code = 12 [json_name = "country_code"];
+  repeated StringFilter province = 13 [json_name = "province"];
+  repeated StringFilter city = 14 [json_name = "city"];
+}
+
+message DomainIntelligenceFilter {
+  repeated IntFilter id = 1 [json_name = "id"];
+  repeated StringFilter domain = 2 [json_name = "domain"];
+  repeated BoolFilter is_malicious = 3 [json_name = "is_malicious"];
+  repeated StringFilter confidence_level = 4 [json_name = "ConfidenceLevel"];
+  repeated StringFilter severity = 5 [json_name = "Severity"];
+  repeated StringFilter judgments = 6 [json_name = "judgments"];
+  repeated StringFilter tags_classes = 7 [json_name = "tags_classes"];
+  repeated IntFilter organization_id = 8 [json_name = "organization_id"];
+  repeated IntFilter scope_id = 9 [json_name = "scope_id"];
+}
+
+message IPIntelligenceDetail {
+  int64 id = 1 [json_name = "id"];
+  string ip = 2 [json_name = "ip"];
+  bool is_malicious = 3 [json_name = "is_malicious"];
+  string confidence_level = 4 [json_name = "confidence_level"];
+  string severity = 5 [json_name = "severity"];
+  repeated string judgments = 6 [json_name = "judgments"];
+  repeated string tags_classes = 7 [json_name = "tags_classes"];
+  int64 organization_id = 8 [json_name = "organization_id"];
+  OrganizationInfo organization = 9 [json_name = "organization"];
+  int64 scope_id = 10 [json_name = "scope_id"];
+  ScopeInfo scope = 11 [json_name = "scope"];
+  string carrier = 12 [json_name = "carrier"];
+  string country = 13 [json_name = "country"];
+  string country_code = 14 [json_name = "country_code"];
+  string province = 15 [json_name = "province"];
+  string city = 16 [json_name = "city"];
+  string lat = 17 [json_name = "lat"];
+  string lng = 18 [json_name = "lng"];
+  string created_at = 19 [json_name = "created_at"];
+  string updated_at = 20 [json_name = "updated_at"];
+}
+
+message DomainIntelligenceDetail {
+  int64 id = 1 [json_name = "id"];
+  string domain = 2 [json_name = "domain"];
+  bool is_malicious = 3 [json_name = "is_malicious"];
+  string confidence_level = 4 [json_name = "confidence_level"];
+  string severity = 5 [json_name = "severity"];
+  repeated string judgments = 6 [json_name = "judgments"];
+  repeated string tags_classes = 7 [json_name = "tags_classes"];
+  int64 organization_id = 8 [json_name = "organization_id"];
+  OrganizationInfo organization = 9 [json_name = "organization"];
+  int64 scope_id = 10 [json_name = "scope_id"];
+  ScopeInfo scope = 11 [json_name = "scope"];
+  string created_at = 12 [json_name = "created_at"];
+  string updated_at = 13 [json_name = "updated_at"];
+}
+
+message GetIPIntelligenceListRequest {
+  int64 count = 1 [json_name = "count"];
+  int64 offset = 2 [json_name = "offset"];
+  repeated OrderBy order_by = 3 [json_name = "orderBy"];
+  IPIntelligenceFilter filter = 4 [json_name = "filter"];
+}
+
+message GetIPIntelligenceListResponse {
+  int64 total = 1 [json_name = "total"];
+  repeated IPIntelligenceDetail data = 2 [json_name = "data"];
+}
+
+message GetIPIntelligenceDetailRequest {
+  int64 id = 1 [json_name = "id"];
+}
+
+message GetIPIntelligenceDetailResponse {
+  IPIntelligenceDetail data = 1 [json_name = "data"];
+}
+
+message GetDomainIntelligenceListRequest {
+  int64 count = 1 [json_name = "count"];
+  int64 offset = 2 [json_name = "offset"];
+  repeated OrderBy order_by = 3 [json_name = "orderBy"];
+  DomainIntelligenceFilter filter = 4 [json_name = "filter"];
+}
+
+message GetDomainIntelligenceListResponse {
+  int64 total = 1 [json_name = "total"];
+  repeated DomainIntelligenceDetail data = 2 [json_name = "data"];
+}
+
+message GetDomainIntelligenceDetailRequest {
+  int64 id = 1 [json_name = "id"];
+}
+
+message GetDomainIntelligenceDetailResponse {
+  DomainIntelligenceDetail data = 1 [json_name = "data"];
+}
+
+// ============================================================
+// KnowledgeBaseService
+// ============================================================
+
+service KnowledgeBaseService {
+  rpc SearchStandardVulnList(SearchStandardVulnListRequest) returns (SearchStandardVulnListResponse);
+  rpc GetStandardVulnDetailByCTID(GetStandardVulnDetailByCTIDRequest) returns (GetStandardVulnDetailByCTIDResponse);
+  rpc GetStandardVulnDetailByID(GetStandardVulnDetailByIDRequest) returns (GetStandardVulnDetailByIDResponse);
+  rpc SearchCustomizeTags(SearchCustomizeTagsRequest) returns (SearchCustomizeTagsResponse);
+  rpc CreateCustomizeTag(CreateCustomizeTagRequest) returns (CreateCustomizeTagResponse);
+  rpc DeleteCustomizeTag(DeleteCustomizeTagRequest) returns (DeleteCustomizeTagResponse);
+  rpc AppendCustomizeTags(AppendCustomizeTagsRequest) returns (AppendCustomizeTagsResponse);
+  rpc ReplaceCustomizeTags(ReplaceCustomizeTagsRequest) returns (ReplaceCustomizeTagsResponse);
+}
+
+message KBVulnFilter {
+  repeated IntFilter id = 1 [json_name = "id"];
+  repeated StringFilter ct_id = 2 [json_name = "ct_id"];
+  repeated StringFilter cve_id = 3 [json_name = "cve_id"];
+  repeated StringFilter cnnvd_id = 4 [json_name = "cnnvd_id"];
+  repeated StringFilter cnvd_id = 5 [json_name = "cnvd_id"];
+  repeated StringFilter cwe = 6 [json_name = "cwe"];
+  repeated StringFilter severity = 7 [json_name = "severity"];
+  repeated StringFilter title = 8 [json_name = "title"];
+  repeated StringFilter affected_scope = 9 [json_name = "affected_scope"];
+  repeated StringFilter tag_name = 10 [json_name = "tag_name"];
+  repeated StringFilter customize_tag_name = 11 [json_name = "customize_tag_name"];
+  repeated StringFilter disclosure_date = 12 [json_name = "disclosure_date"];
+}
+
+message KBVulnItem {
+  int64 id = 1 [json_name = "id"];
+  string ct_id = 2 [json_name = "ct_id"];
+  string cve_id = 3 [json_name = "cve_id"];
+  string cnnvd_id = 4 [json_name = "cnnvd_id"];
+  string cnvd_id = 5 [json_name = "cnvd_id"];
+  string cwe = 6 [json_name = "cwe"];
+  string title = 7 [json_name = "title"];
+  string severity = 8 [json_name = "severity"];
+  string affected_scope = 9 [json_name = "affected_scope"];
+  string disclosure_date = 10 [json_name = "disclosure_date"];
+  repeated string tag_names = 11 [json_name = "tag_names"];
+  repeated string customize_tag_names = 12 [json_name = "customize_tag_names"];
+}
+
+message KBVulnDetail {
+  string ct_id = 1 [json_name = "ct_id"];
+  string cve_id = 2 [json_name = "cve_id"];
+  string title = 3 [json_name = "title"];
+  string severity = 4 [json_name = "severity"];
+  string description = 5 [json_name = "description"];
+  string affected_scope = 6 [json_name = "affected_scope"];
+  string cwe = 7 [json_name = "cwe"];
+  string cnnvd_id = 8 [json_name = "cnnvd_id"];
+  string cnvd_id = 9 [json_name = "cnvd_id"];
+  float cvss3_score = 10 [json_name = "cvss3_score"];
+  string cvss3 = 11 [json_name = "cvss3"];
+  string disclosure_date = 12 [json_name = "disclosure_date"];
+  string exp = 13 [json_name = "exp"];
+  repeated AffectedProduct affected_product = 14 [json_name = "affected_product"];
+  repeated KBTagInfo tags = 15 [json_name = "tags"];
+  repeated KBTagInfo customize_tags = 16 [json_name = "customize_tags"];
+}
+
+message KBTagInfo {
+  int64 id = 1 [json_name = "id"];
+  string name = 2 [json_name = "name"];
+  string name_cn = 3 [json_name = "name_cn"];
+  string category = 4 [json_name = "category"];
+}
+
+message SearchStandardVulnListRequest {
+  int64 count = 1 [json_name = "count"];
+  int64 offset = 2 [json_name = "offset"];
+  KBVulnFilter filter = 3 [json_name = "filter"];
+}
+
+message SearchStandardVulnListResponse {
+  int64 total = 1 [json_name = "total"];
+  repeated KBVulnItem data = 2 [json_name = "data"];
+}
+
+message GetStandardVulnDetailByCTIDRequest {
+  string ct_id = 1 [json_name = "ct_id"];
+}
+
+message GetStandardVulnDetailByCTIDResponse {
+  KBVulnDetail detail = 1 [json_name = "detail"];
+}
+
+message GetStandardVulnDetailByIDRequest {
+  int64 id = 1 [json_name = "id"];
+}
+
+message GetStandardVulnDetailByIDResponse {
+  KBVulnDetail detail = 1 [json_name = "detail"];
+}
+
+message SearchCustomizeTagsRequest {
+  string keyword = 1 [json_name = "keyword"];
+}
+
+message SearchCustomizeTagsResponse {
+  repeated KBTagInfo data = 1 [json_name = "data"];
+}
+
+message CreateCustomizeTagRequest {
+  string name = 1 [json_name = "name"];
+  string category = 2 [json_name = "category"];
+}
+
+message CreateCustomizeTagResponse {
+  KBTagInfo data = 1 [json_name = "data"];
+}
+
+message DeleteCustomizeTagRequest {
+  int64 id = 1 [json_name = "id"];
+}
+
+message DeleteCustomizeTagResponse {}
+
+message AppendCustomizeTagsRequest {
+  int64 vuln_id = 1 [json_name = "vuln_id"];
+  repeated string tag_names = 2 [json_name = "tag_names"];
+}
+
+message AppendCustomizeTagsResponse {}
+
+message ReplaceCustomizeTagsRequest {
+  int64 vuln_id = 1 [json_name = "vuln_id"];
+  repeated string tag_names = 2 [json_name = "tag_names"];
+}
+
+message ReplaceCustomizeTagsResponse {}
+
+// ============================================================
+// DeviceService
+// ============================================================
+
+service DeviceService {
+  rpc CheckScanDeviceAuth(CheckScanDeviceAuthRequest) returns (CheckScanDeviceAuthResponse);
+  rpc CreateDevice(CreateDeviceRequest) returns (CreateDeviceResponse);
+  rpc RemoveScanDevice(RemoveScanDeviceRequest) returns (RemoveScanDeviceResponse);
+  rpc GetDataAccessMapping(GetDataAccessMappingRequest) returns (GetDataAccessMappingResponse);
+  rpc GetDeviceProductNameList(GetDeviceProductNameListRequest) returns (GetDeviceProductNameListResponse);
+}
+
+message CheckScanDeviceAuthRequest {
+  int64 device_id = 1 [json_name = "device_id"];
+  map<string, string> env_map = 2 [json_name = "env_map"];
+}
+
+message CheckScanDeviceAuthResponse {}
+
+message CreateDeviceRequest {
+  string name = 1 [json_name = "name"];
+  string description = 2 [json_name = "description"];
+  string image = 3 [json_name = "image"];
+  string url = 4 [json_name = "url"];
+  int64 logo_file_id = 5 [json_name = "logo_file_id"];
+  int64 organization_id = 6 [json_name = "organization_id"];
+  int64 owner_id = 7 [json_name = "owner_id"];
+  int64 security_scope_id = 8 [json_name = "security_scope_id"];
+  string license_start_time = 9 [json_name = "license_start_time"];
+  string license_end_time = 10 [json_name = "license_end_time"];
+  map<string, string> env_map = 11 [json_name = "env_map"];
+}
+
+message DeviceDetail {
+  int64 id = 1 [json_name = "id"];
+  string name = 2 [json_name = "name"];
+  string description = 3 [json_name = "description"];
+  string image = 4 [json_name = "image"];
+  string url = 5 [json_name = "url"];
+  int64 organization_id = 6 [json_name = "organization_id"];
+  int64 owner_id = 7 [json_name = "owner_id"];
+  int64 security_scope_id = 8 [json_name = "security_scope_id"];
+  string license_start_time = 9 [json_name = "license_start_time"];
+  string license_end_time = 10 [json_name = "license_end_time"];
+  string created_at = 11 [json_name = "created_at"];
+  string updated_at = 12 [json_name = "updated_at"];
+}
+
+message CreateDeviceResponse {
+  DeviceDetail result = 1 [json_name = "result"];
+}
+
+message RemoveScanDeviceRequest {
+  int64 device_id = 1 [json_name = "device_id"];
+}
+
+message RemoveScanDeviceResponse {}
+
+message DataAccessMapping {
+  int64 id = 1 [json_name = "id"];
+  string name = 2 [json_name = "name"];
+  repeated string data_access_list = 3 [json_name = "data_access_list"];
+}
+
+message GetDataAccessMappingRequest {}
+
+message GetDataAccessMappingResponse {
+  repeated DataAccessMapping data = 1 [json_name = "data"];
+}
+
+message GetDeviceProductNameListRequest {}
+
+message ProductNameItem {
+  string name = 1 [json_name = "name"];
+  string product_name = 2 [json_name = "product_name"];
+}
+
+message GetDeviceProductNameListResponse {
+  repeated ProductNameItem data = 1 [json_name = "data"];
+}
+
+// ============================================================
+// VptService
+// ============================================================
+
+service VptService {
+  rpc GetVulnVptScore(GetVulnVptScoreRequest) returns (GetVulnVptScoreResponse);
+  rpc GetVulnVptScoreSetting(GetVulnVptScoreSettingRequest) returns (GetVulnVptScoreSettingResponse);
+  rpc SaveVulnVptScoreSetting(SaveVulnVptScoreSettingRequest) returns (SaveVulnVptScoreSettingResponse);
+  rpc ResetVulnVptScoreSetting(ResetVulnVptScoreSettingRequest) returns (ResetVulnVptScoreSettingResponse);
+  rpc GetVulnVptScoreState(GetVulnVptScoreStateRequest) returns (GetVulnVptScoreStateResponse);
+}
+
+message VptScoreItem {
+  int64 id = 1 [json_name = "id"];
+  string name = 2 [json_name = "name"];
+  string type = 3 [json_name = "type"];
+  string vuln_level = 4 [json_name = "vuln_level"];
+  string vuln_weakness = 5 [json_name = "vuln_weakness"];
+  string cve = 6 [json_name = "cve"];
+  string cnnvd = 7 [json_name = "cnnvd"];
+  string cnvd = 8 [json_name = "cnvd"];
+  string ct_id = 9 [json_name = "ct_id"];
+  double total_score = 10 [json_name = "total_score"];
+  double vulnerability_value = 11 [json_name = "vulnerability_value"];
+  double intelligence_value = 12 [json_name = "intelligence_value"];
+  double asset_value = 13 [json_name = "asset_value"];
+  double weighted_value = 14 [json_name = "weighted_value"];
+  double special_value = 15 [json_name = "special_value"];
+  VptCostDetail cost = 16 [json_name = "cost"];
+}
+
+message VptCostDetail {
+  string data_cost = 1 [json_name = "data_cost"];
+  string score_cost = 2 [json_name = "score_cost"];
+}
+
+message GetVulnVptScoreRequest {
+  repeated int64 vuln_ids = 1 [json_name = "vuln_ids"];
+  string vuln_type = 2 [json_name = "vuln_type"];
+}
+
+message GetVulnVptScoreResponse {
+  repeated VptScoreItem list = 1 [json_name = "list"];
+}
+
+message VptValueSetting {
+  int64 weights = 1 [json_name = "weights"];
+  map<string, VptImpactKey> impact_key = 2 [json_name = "impact_key"];
+}
+
+message VptImpactKey {
+  string field = 1 [json_name = "field"];
+  int64 field_type = 2 [json_name = "field_type"];
+  int64 field_table = 3 [json_name = "field_table"];
+  string impact_key = 4 [json_name = "impact_key"];
+  int64 default_score = 5 [json_name = "default_score"];
+  int64 weights = 6 [json_name = "weights"];
+  repeated VptValueScoreItem value_score = 7 [json_name = "value_score"];
+}
+
+message VptValueScoreItem {
+  string op = 1 [json_name = "op"];
+  int64 score = 2 [json_name = "score"];
+  string value = 3 [json_name = "value"];
+}
+
+message VptSetting {
+  VptValueSetting asset_value = 1 [json_name = "asset_value"];
+  VptValueSetting intelligence_value = 2 [json_name = "intelligence_value"];
+  VptValueSetting vulnerability_value = 3 [json_name = "vulnerability_value"];
+  double special_match_score = 4 [json_name = "special_match_score"];
+}
+
+message GetVulnVptScoreSettingRequest {}
+
+message GetVulnVptScoreSettingResponse {
+  bool is_default = 1 [json_name = "is_default"];
+  VptSetting setting = 2 [json_name = "setting"];
+}
+
+message SaveVulnVptScoreSettingRequest {
+  VptSetting setting = 1 [json_name = "setting"];
+}
+
+message SaveVulnVptScoreSettingResponse {}
+
+message ResetVulnVptScoreSettingRequest {}
+
+message ResetVulnVptScoreSettingResponse {}
+
+message GetVulnVptScoreStateRequest {}
+
+message GetVulnVptScoreStateResponse {
+  string state = 1 [json_name = "state"];
+  int64 progress = 2 [json_name = "progress"];
+}
