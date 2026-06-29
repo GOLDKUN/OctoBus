@@ -1,5 +1,4 @@
 import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
-import { Agent } from 'undici';
 
 export const METHOD_GET_STATUS_FULL = 'Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetStatus';
 export const METHOD_LIST_SPACES_FULL = 'Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/ListSpaces';
@@ -149,8 +148,10 @@ const joinPath = (baseUrl, path) => {
   return `${base}/${normalizedPath}`;
 };
 
-const buildUrl = (baseUrl, path, query = {}) => {
-  const joined = joinPath(baseUrl, path);
+const buildUrl = (baseUrl, path, query = {}, space = '') => {
+  const s = toTrimmedString(space);
+  const spacePrefix = s && s !== 'default' ? `/s/${encodeURIComponent(s)}` : '';
+  const joined = joinPath(baseUrl, `${spacePrefix}${path}`);
   const qs = encodeQueryPairs(query);
   return qs ? `${joined}?${qs}` : joined;
 };
@@ -200,6 +201,8 @@ const executeRequest = async (url, ctx = {}, options = {}) => {
     const errMsg = err?.cause?.message || err?.message || 'fetch failed';
     logFlow(ctx, options.action || 'fetch:error', { url, error: errMsg });
     throw attachResponse(errorWithCode('UNAVAILABLE', `${options.action || 'fetch'} failed: ${errMsg}`), { http_status: 0, http_body: errMsg });
+  } finally {
+    clearTimeout(timer);
   }
   let rawBody;
   try { rawBody = await res.text(); }
@@ -331,7 +334,8 @@ const handleFindSavedObjects = async (req = {}, ctx = {}) => {
   if (Array.isArray(req.fields) && req.fields.length > 0) {
     params.fields = req.fields.map(String).join(',');
   }
-  const url = buildUrl(baseUrl, '/api/saved_objects/_find', params);
+  const space = toTrimmedString(req.space);
+  const url = buildUrl(baseUrl, '/api/saved_objects/_find', params, space);
   logFlow(callCtx, 'FindSavedObjects', { url: joinPath(baseUrl, '/api/saved_objects/_find'), type });
   const headers = buildHeaders(callCtx);
   const result = await executeRequest(url, callCtx, { headers, action: 'FindSavedObjects' });
@@ -366,7 +370,8 @@ const handleGetSavedObject = async (req = {}, ctx = {}) => {
   const id = toTrimmedString(req.id);
   if (!type) throw errorWithCode('INVALID_ARGUMENT', 'type is required');
   if (!id) throw errorWithCode('INVALID_ARGUMENT', 'id is required');
-  const url = buildUrl(baseUrl, `/api/saved_objects/${encodeURIComponent(type)}/${encodeURIComponent(id)}`);
+  const space = toTrimmedString(req.space);
+  const url = buildUrl(baseUrl, `/api/saved_objects/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, {}, space);
   logFlow(callCtx, 'GetSavedObject', { url: joinPath(baseUrl, `/api/saved_objects/${type}/${id}`) });
   const headers = buildHeaders(callCtx);
   const result = await executeRequest(url, callCtx, { headers, action: 'GetSavedObject' });
@@ -396,7 +401,8 @@ const handleBulkGetSavedObjects = async (req = {}, ctx = {}) => {
   const objects = Array.isArray(req.objects) ? req.objects : [];
   if (objects.length === 0) throw errorWithCode('INVALID_ARGUMENT', 'at least one object is required');
   const body = objects.map((o) => ({ type: toTrimmedString(o?.type || o), id: toTrimmedString(o?.id || o) }));
-  const url = buildUrl(baseUrl, '/api/saved_objects/_bulk_get');
+  const space = toTrimmedString(req.space);
+  const url = buildUrl(baseUrl, '/api/saved_objects/_bulk_get', {}, space);
   logFlow(callCtx, 'BulkGetSavedObjects', { url: joinPath(baseUrl, '/api/saved_objects/_bulk_get'), count: body.length });
   const headers = { ...buildHeaders(callCtx), 'Content-Type': 'application/json' };
   const result = await executeRequest(url, callCtx, { method: 'POST', headers, body: JSON.stringify(body), action: 'BulkGetSavedObjects' });
@@ -432,7 +438,8 @@ const handleExportSavedObjects = async (req = {}, ctx = {}) => {
       return { type, id: String(o) };
     });
   }
-  const url = buildUrl(baseUrl, '/api/saved_objects/_export');
+  const space = toTrimmedString(req.space);
+  const url = buildUrl(baseUrl, '/api/saved_objects/_export', {}, space);
   logFlow(callCtx, 'ExportSavedObjects', { url: joinPath(baseUrl, '/api/saved_objects/_export'), type });
   const headers = {
     ...buildHeaders(callCtx),
