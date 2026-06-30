@@ -3,9 +3,8 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { fork } from 'child_process';
-import http from 'http';
 
-import { _test, rpcdef } from '../src/360-epp.js';
+import { rpcdef } from '../src/360-epp.js';
 
 const mockUrl = (port) => `http://127.0.0.1:${port}`;
 

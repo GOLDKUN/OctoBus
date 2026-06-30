@@ -19,7 +19,7 @@
     },
     "skipTlsVerify": {
       "type": "boolean",
-      "default": true,
+      "default": false,
       "description": "跳过 TLS 证书验证（适用于自签名证书部署）"
     }
   },

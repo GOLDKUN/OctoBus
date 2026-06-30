@@ -79,7 +79,9 @@ class EppSession {
     this.cookie = null;
     this.baseUrl = null;
     this.timeoutMs = DEFAULT_TIMEOUT_MS;
-    this.skipTlsVerify = true;
+    this.skipTlsVerify = false;
+    this.username = null;
+    this.password = null;
   }
 
   configure(ctx) {
@@ -168,6 +170,9 @@ class EppSession {
         }
         throw errorWithCode('UNAUTHENTICATED', 'login succeeded but no session cookie received');
       }
+
+      this.username = username;
+      this.password = password;
     } catch (e) {
       if (e instanceof GrpcError) throw e;
       throw errorWithCode('UNAVAILABLE', `login error: ${e.message}`);
@@ -201,7 +206,11 @@ class EppSession {
 
     const data = await res.json();
     if (data.errno === 10401) {
-      // Session expired, need re-login (handled upstream)
+      this.cookie = null;
+      if (this.username && this.password) {
+        await this.login(this.username, this.password);
+        return this.apiGet(path, queryParams);
+      }
       throw errorWithCode('UNAUTHENTICATED', `session expired: ${data.errmsg}`);
     }
     if (data.errno !== 0 && data.errno !== undefined) {
@@ -232,6 +241,14 @@ class EppSession {
     }
 
     const data = await res.json();
+    if (data.errno === 10401) {
+      this.cookie = null;
+      if (this.username && this.password) {
+        await this.login(this.username, this.password);
+        return this.apiPost(path, body);
+      }
+      throw errorWithCode('UNAUTHENTICATED', `session expired: ${data.errmsg}`);
+    }
     if (data.errno !== 0 && data.errno !== undefined) {
       throw errorWithCode('FAILED_PRECONDITION', `API error: ${data.errmsg} (errno=${data.errno})`);
     }
@@ -244,12 +261,27 @@ class EppSession {
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
-      const res = await fetch(url, {
+      const fetchOptions = {
         ...options,
         signal: controller.signal,
-        ...(this.skipTlsVerify ? { tlsInsecureSkipVerify: true } : {}),
-      });
-      return res;
+      };
+      // Node.js native fetch (undici) does not support tlsInsecureSkipVerify.
+      // Use NODE_TLS_REJECT_UNAUTHORIZED for cross-version TLS skipping.
+      let prevRejectUnauthorized;
+      if (this.skipTlsVerify) {
+        prevRejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+      }
+      try {
+        const res = await fetch(url, fetchOptions);
+        return res;
+      } finally {
+        if (this.skipTlsVerify && prevRejectUnauthorized !== undefined) {
+          process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevRejectUnauthorized;
+        } else if (this.skipTlsVerify) {
+          delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+        }
+      }
     } catch (e) {
       if (e.name === 'AbortError') {
         throw errorWithCode('DEADLINE_EXCEEDED', `request timeout after ${this.timeoutMs}ms`);
