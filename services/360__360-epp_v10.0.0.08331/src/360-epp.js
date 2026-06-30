@@ -277,6 +277,7 @@ class EppSession {
       }, (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
+        res.on('error', reject);
         res.on('end', () => {
           const body = Buffer.concat(chunks);
           const headers = res.headers;
