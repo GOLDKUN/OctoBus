@@ -82,6 +82,7 @@ class EppSession {
     this.skipTlsVerify = false;
     this.username = null;
     this.password = null;
+    this._reloginAttempts = 0;
   }
 
   configure(ctx) {
@@ -90,9 +91,17 @@ class EppSession {
       bindings.endpoint || bindings.baseUrl || bindings.restBaseUrl || ''
     );
     this.timeoutMs = ctx.limits?.timeoutMs || bindings.timeoutMs || DEFAULT_TIMEOUT_MS;
-    this.skipTlsVerify = Boolean(
+    const skipTls = Boolean(
       bindings.skipTlsVerify || bindings.tlsInsecureSkipVerify || bindings.skip_tls_verify
     );
+    if (skipTls !== this.skipTlsVerify) {
+      this.skipTlsVerify = skipTls;
+      // Node.js native fetch (undici) does not accept an agent option.
+      // Set once per session at configure time; avoids per-request race.
+      if (skipTls) {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+      }
+    }
   }
 
   async login(username, password) {
@@ -173,6 +182,7 @@ class EppSession {
 
       this.username = username;
       this.password = password;
+      this._reloginAttempts = 0;
     } catch (e) {
       if (e instanceof GrpcError) throw e;
       throw errorWithCode('UNAVAILABLE', `login error: ${e.message}`);
@@ -207,7 +217,8 @@ class EppSession {
     const data = await res.json();
     if (data.errno === 10401) {
       this.cookie = null;
-      if (this.username && this.password) {
+      if (this.username && this.password && this._reloginAttempts < 1) {
+        this._reloginAttempts++;
         await this.login(this.username, this.password);
         return this.apiGet(path, queryParams);
       }
@@ -243,7 +254,8 @@ class EppSession {
     const data = await res.json();
     if (data.errno === 10401) {
       this.cookie = null;
-      if (this.username && this.password) {
+      if (this.username && this.password && this._reloginAttempts < 1) {
+        this._reloginAttempts++;
         await this.login(this.username, this.password);
         return this.apiPost(path, body);
       }
@@ -261,27 +273,11 @@ class EppSession {
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
-      const fetchOptions = {
+      const res = await fetch(url, {
         ...options,
         signal: controller.signal,
-      };
-      // Node.js native fetch (undici) does not support tlsInsecureSkipVerify.
-      // Use NODE_TLS_REJECT_UNAUTHORIZED for cross-version TLS skipping.
-      let prevRejectUnauthorized;
-      if (this.skipTlsVerify) {
-        prevRejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-        process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-      }
-      try {
-        const res = await fetch(url, fetchOptions);
-        return res;
-      } finally {
-        if (this.skipTlsVerify && prevRejectUnauthorized !== undefined) {
-          process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevRejectUnauthorized;
-        } else if (this.skipTlsVerify) {
-          delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-        }
-      }
+      });
+      return res;
     } catch (e) {
       if (e.name === 'AbortError') {
         throw errorWithCode('DEADLINE_EXCEEDED', `request timeout after ${this.timeoutMs}ms`);
