@@ -15,6 +15,7 @@ const METHOD_GET_JOB_STATUS = '/TheHive_CORTEX.TheHive_CORTEX/GetJobStatus';
 const grpcCodeFor = (code) => ({
   INVALID_ARGUMENT: grpcStatus.INVALID_ARGUMENT,
   FAILED_PRECONDITION: grpcStatus.FAILED_PRECONDITION,
+  UNAUTHENTICATED: grpcStatus.UNAUTHENTICATED,
   PERMISSION_DENIED: grpcStatus.PERMISSION_DENIED,
   UNAVAILABLE: grpcStatus.UNAVAILABLE,
   DEADLINE_EXCEEDED: grpcStatus.DEADLINE_EXCEEDED,
@@ -107,7 +108,7 @@ const pickStringField = (req, keys) => {
 export function rpcdef(ctx) {
   const bindings = mergedBindings(ctx);
   const restBaseUrl = bindings.restBaseUrl || bindings.rest_base_url || bindings.baseUrl || bindings.base_url || bindings.endpoint || '';
-  const timeoutMs = bindings.timeoutMs || ctx.limits?.timeoutMs || DEFAULT_TIMEOUT_MS;
+  const timeoutMs = Number(bindings.timeoutMs) || ctx.limits?.timeoutMs || DEFAULT_TIMEOUT_MS;
   const baseHeaders = parseHeaders(bindings.headers);
   const meta = ctx.meta || {};
   const skipTlsVerify = Boolean(bindings.tlsInsecureSkipVerify || bindings.skipTlsVerify || bindings.skip_tls_verify || bindings.tls_insecure_skip_verify);
@@ -175,23 +176,31 @@ export function rpcdef(ctx) {
     try {
       return await fetch(url, {
         ...init,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: init?.signal ?? AbortSignal.timeout(timeoutMs),
         ...tlsOptions(),
       });
     } catch (e) {
+      if (e?.name === 'TimeoutError' || e?.cause?.name === 'TimeoutError') {
+        throw errorWithCode('DEADLINE_EXCEEDED', `request timed out after ${timeoutMs}ms`);
+      }
       const reason = e?.cause?.message || e?.message || 'fetch failed';
       throw errorWithCode('UNAVAILABLE', reason);
     }
   };
 
   const throwForHttpError = (status, text) => {
-    if (status === 401 || status === 403) {
-      throw errorWithCode('PERMISSION_DENIED', `upstream http ${status}: ${text}`);
+    // Log upstream body server-side only; never include it in gRPC error details.
+    try { console.log(`[TheHive_CORTEX][http-error] upstream ${status}: ${String(text).slice(0, 512)}`); } catch {}
+    if (status === 401) {
+      throw errorWithCode('UNAUTHENTICATED', `upstream http ${status}`);
+    }
+    if (status === 403) {
+      throw errorWithCode('PERMISSION_DENIED', `upstream http ${status}`);
     }
     if (status >= 400 && status < 500) {
-      throw errorWithCode('FAILED_PRECONDITION', `upstream http ${status}: ${text}`);
+      throw errorWithCode('FAILED_PRECONDITION', `upstream http ${status}`);
     }
-    throw errorWithCode('UNAVAILABLE', `upstream http ${status}: ${text}`);
+    throw errorWithCode('UNAVAILABLE', `upstream http ${status}`);
   };
 
   const readJsonResponse = async (res, emptyValue) => {
@@ -359,14 +368,15 @@ export function rpcdef(ctx) {
     const job = json;
 
     if (typeof report === 'string') {
-      // Job still running: "Running" or "Waiting" etc.
-      // Use the actual job status, not the report string, to stay within
-      // the proto-defined enum (Waiting/InProgress/Success/Failure).
+      // Job still running: report is a status string like "Running" or "Waiting".
+      // Use the actual job status from the top-level response (e.g. "InProgress"),
+      // not the report string itself, to stay within the proto-defined enum.
+      // Wrap the report string in summary so callers can see the upstream message.
       return {
         id: String(job?.id ?? job?._id ?? ''),
-        status: String(job?.status ?? ''),
+        status: String(job?.status ?? 'InProgress'),
         success: false,
-        summary: {},
+        summary: { message: report },
         full: {},
         operations: toValue(null),
         artifacts: [],

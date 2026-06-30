@@ -136,7 +136,7 @@ test('ListAnalyzers handles auth error', async () => {
     text: async () => 'unauthorized',
   }));
   const handler = await loadHandler(listAnalyzersPath);
-  await assert.rejects(() => handler(), /PERMISSION_DENIED: upstream http 401/);
+  await assert.rejects(() => handler(), /UNAUTHENTICATED: upstream http 401/);
 });
 
 // ==================== AnalyzeObservable ====================
@@ -307,6 +307,7 @@ test('GetJobReport maps in-progress job', async () => {
   assert.equal(res.data.id, 'job2');
   assert.equal(res.data.status, 'InProgress');
   assert.equal(res.data.success, false);
+  assert.deepEqual(res.data.summary, { message: 'Running' });
 });
 
 test('timeoutMs from config/bindings takes precedence over limits', async () => {
@@ -330,6 +331,50 @@ test('timeoutMs from config/bindings takes precedence over limits', async () => 
   // The signal should reflect the config timeoutMs (3000), not limits (10000).
   // We verify the timeout was created by checking the AbortSignal exists.
   assert.ok(captured.init.signal);
+});
+
+test('GetJobReport maps in-progress job without explicit status', async () => {
+  setFetch(async () => ({
+    ok: true,
+    status: 200,
+    headers: new Map([['content-type', 'application/json']]),
+    text: async () => JSON.stringify({ id: 'job5', report: 'Waiting' }),
+  }));
+
+  const handler = await loadHandler(getJobReportPath, { job_id: 'job5' });
+  const res = await handler();
+
+  assert.equal(res.data.id, 'job5');
+  assert.equal(res.data.status, 'InProgress');
+  assert.equal(res.data.success, false);
+  assert.deepEqual(res.data.summary, { message: 'Waiting' });
+});
+
+test('HTTP error does not leak upstream response body', async () => {
+  setFetch(async () => ({
+    ok: false,
+    status: 403,
+    headers: new Map([['content-type', 'application/json']]),
+    text: async () => JSON.stringify({ secret: 'internal-details' }),
+  }));
+  const handler = await loadHandler(listAnalyzersPath);
+  try {
+    await handler();
+    assert.fail('should have thrown');
+  } catch (err) {
+    assert.match(err.message, /PERMISSION_DENIED/);
+    assert.doesNotMatch(err.message, /internal-details/);
+  }
+});
+
+test('timeout error maps to DEADLINE_EXCEEDED', async () => {
+  setFetch(async () => {
+    const err = new Error('timed out');
+    err.name = 'TimeoutError';
+    throw err;
+  });
+  const handler = await loadHandler(listAnalyzersPath);
+  await assert.rejects(() => handler(), /DEADLINE_EXCEEDED/);
 });
 
 test('GetJobReport maps failure report', async () => {
@@ -634,7 +679,7 @@ test('request apiKey overrides secret apiKey', async () => {
 test('HTTP errors map to correct gRPC codes', async () => {
   const { _test } = await import('../src/cortex.js');
 
-  // 401 → PERMISSION_DENIED
+  // 401 → UNAUTHENTICATED
   setFetch(async () => ({
     ok: false,
     status: 401,
@@ -642,7 +687,7 @@ test('HTTP errors map to correct gRPC codes', async () => {
     text: async () => 'unauthorized',
   }));
   const handler401 = await loadHandler(listAnalyzersPath);
-  await assert.rejects(() => handler401(), /PERMISSION_DENIED/);
+  await assert.rejects(() => handler401(), /UNAUTHENTICATED/);
 
   // 403 → PERMISSION_DENIED
   setFetch(async () => ({
