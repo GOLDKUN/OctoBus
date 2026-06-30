@@ -4,6 +4,7 @@
 
 import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
 import crypto from 'crypto';
+import https from 'node:https';
 
 const DEFAULT_TIMEOUT_MS = 30000;
 
@@ -74,6 +75,9 @@ function md5Hash(str) {
 
 // ========== Session Management ==========
 
+// Per-connection TLS skip agent; scoped to connections, not global.
+const insecureAgent = new https.Agent({ rejectUnauthorized: false });
+
 class EppSession {
   constructor() {
     this.cookie = null;
@@ -82,7 +86,6 @@ class EppSession {
     this.skipTlsVerify = false;
     this.username = null;
     this.password = null;
-    this._reloginAttempts = 0;
   }
 
   configure(ctx) {
@@ -91,17 +94,9 @@ class EppSession {
       bindings.endpoint || bindings.baseUrl || bindings.restBaseUrl || ''
     );
     this.timeoutMs = ctx.limits?.timeoutMs || bindings.timeoutMs || DEFAULT_TIMEOUT_MS;
-    const skipTls = Boolean(
+    this.skipTlsVerify = Boolean(
       bindings.skipTlsVerify || bindings.tlsInsecureSkipVerify || bindings.skip_tls_verify
     );
-    if (skipTls !== this.skipTlsVerify) {
-      this.skipTlsVerify = skipTls;
-      // Node.js native fetch (undici) does not accept an agent option.
-      // Set once per session at configure time; avoids per-request race.
-      if (skipTls) {
-        process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-      }
-    }
   }
 
   async login(username, password) {
@@ -182,14 +177,13 @@ class EppSession {
 
       this.username = username;
       this.password = password;
-      this._reloginAttempts = 0;
     } catch (e) {
       if (e instanceof GrpcError) throw e;
       throw errorWithCode('UNAVAILABLE', `login error: ${e.message}`);
     }
   }
 
-  async apiGet(path, queryParams = {}) {
+  async apiGet(path, queryParams = {}, retried = false) {
     if (!this.cookie) {
       throw errorWithCode('UNAUTHENTICATED', 'not logged in');
     }
@@ -217,10 +211,9 @@ class EppSession {
     const data = await res.json();
     if (data.errno === 10401) {
       this.cookie = null;
-      if (this.username && this.password && this._reloginAttempts < 1) {
-        this._reloginAttempts++;
+      if (this.username && this.password && !retried) {
         await this.login(this.username, this.password);
-        return this.apiGet(path, queryParams);
+        return this.apiGet(path, queryParams, true);
       }
       throw errorWithCode('UNAUTHENTICATED', `session expired: ${data.errmsg}`);
     }
@@ -231,7 +224,7 @@ class EppSession {
     return data;
   }
 
-  async apiPost(path, body = {}) {
+  async apiPost(path, body = {}, retried = false) {
     if (!this.cookie) {
       throw errorWithCode('UNAUTHENTICATED', 'not logged in');
     }
@@ -254,10 +247,9 @@ class EppSession {
     const data = await res.json();
     if (data.errno === 10401) {
       this.cookie = null;
-      if (this.username && this.password && this._reloginAttempts < 1) {
-        this._reloginAttempts++;
+      if (this.username && this.password && !retried) {
         await this.login(this.username, this.password);
-        return this.apiPost(path, body);
+        return this.apiPost(path, body, true);
       }
       throw errorWithCode('UNAUTHENTICATED', `session expired: ${data.errmsg}`);
     }
@@ -268,15 +260,60 @@ class EppSession {
     return data;
   }
 
+  // Wraps https.request with a custom agent to produce a fetch-like Response.
+  // Used only when skipTlsVerify is true, so TLS skipping is scoped to these
+  // connections and does not affect the global process.
+  _requestHttps(url, options) {
+    return new Promise((resolve, reject) => {
+      const u = new URL(url);
+      const req = https.request({
+        hostname: u.hostname,
+        port: u.port || 443,
+        path: u.pathname + u.search,
+        method: options.method || 'GET',
+        headers: options.headers || {},
+        agent: insecureAgent,
+        signal: options.signal,
+      }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const body = Buffer.concat(chunks);
+          const headers = res.headers;
+          resolve({
+            ok: res.statusCode >= 200 && res.statusCode < 300,
+            status: res.statusCode,
+            headers: {
+              get: (name) => {
+                const lc = name.toLowerCase();
+                return headers[lc] ?? null;
+              },
+            },
+            json: async () => JSON.parse(body.toString()),
+            text: async () => body.toString(),
+          });
+        });
+      });
+      req.on('error', reject);
+      if (options.body) req.write(options.body);
+      req.end();
+    });
+  }
+
   async fetchWithTimeout(url, options = {}) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
-      const res = await fetch(url, {
-        ...options,
-        signal: controller.signal,
-      });
+      const opts = { ...options, signal: controller.signal };
+      // Native fetch (undici) does not support a custom HTTPS agent.
+      // When TLS verification must be skipped, use https.request with a
+      // per-connection insecureAgent so the process-wide TLS setting is
+      // never touched.
+      const useInsecure = this.skipTlsVerify && url.startsWith('https:');
+      const res = useInsecure
+        ? await this._requestHttps(url, opts)
+        : await fetch(url, opts);
       return res;
     } catch (e) {
       if (e.name === 'AbortError') {
