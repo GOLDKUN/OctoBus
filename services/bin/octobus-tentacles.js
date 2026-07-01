@@ -493,6 +493,10 @@ const services = {
     entryFile: "../threatbook__hfish/bin/threatbook-hfish.js",
     serviceModule: "../threatbook__hfish/src/service.js",
   },
+  "dongtai-iast": {
+    entryFile: "../huoxian__dongtai-iast/bin/dongtai-iast.js",
+    serviceModule: "../huoxian__dongtai-iast/src/service.js",
+  },
   "dbappsecurity-mingyu-waf": {
     entryFile: "../dbappsecurity__mingyu-waf/bin/dbappsecurity-mingyu-waf.js",
     serviceModule: "../dbappsecurity__mingyu-waf/src/service.js",

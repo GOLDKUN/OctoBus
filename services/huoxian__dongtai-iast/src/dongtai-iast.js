@@ -3,10 +3,21 @@
 // Auth: Token-based (Authorization: Token <token>)
 
 import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
+import { Agent } from 'undici';
 
 const DEFAULT_TIMEOUT_MS = 5000;
+const MAX_TIMEOUT_MS = 120000;
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 20;
+const MAX_PAGE_SIZE = 1000;
+const MAX_RESPONSE_BYTES = 1024 * 1024;
+
+let insecureTlsDispatcher;
+
+const getInsecureTlsDispatcher = () => {
+  insecureTlsDispatcher ??= new Agent({ connect: { rejectUnauthorized: false } });
+  return insecureTlsDispatcher;
+};
 
 // gRPC method paths
 const LIST_VULNS_PATH = '/Huoxian_IAST_DONGTAI.Huoxian_IAST_DONGTAI/ListVulnerabilities';
@@ -31,6 +42,7 @@ const grpcCodeFor = (code) => ({
   UNAUTHENTICATED: grpcStatus.UNAUTHENTICATED,
   UNAVAILABLE: grpcStatus.UNAVAILABLE,
   DEADLINE_EXCEEDED: grpcStatus.DEADLINE_EXCEEDED,
+  RESOURCE_EXHAUSTED: grpcStatus.RESOURCE_EXHAUSTED,
 })[code] ?? grpcStatus.UNKNOWN;
 
 const errorWithCode = (code, message) => {
@@ -77,9 +89,12 @@ const toPositiveInt = (val) => {
   if (val === undefined || val === null) return null;
   if (typeof val === 'object' && 'value' in val) return toPositiveInt(val.value);
   const n = Number(val);
-  if (!Number.isInteger(n) || Number.isNaN(n)) return null;
+  if (!Number.isInteger(n) || Number.isNaN(n) || n < 0) return null;
   return n;
 };
+
+const toBoolean = (value) => value === true || value === 1 || value === '1'
+  || (typeof value === 'string' && value.trim().toLowerCase() === 'true');
 
 // Protobuf3 string fields default to "" — treat empty strings as absent
 // so the handler falls through to secret bindings or defaults.
@@ -122,9 +137,15 @@ const parseHeaders = (value) => {
 };
 
 const normalizeBaseUrl = (url) => {
-  const base = String(url || '').trim();
-  if (!/^https?:\/\//i.test(base)) return null;
-  return base.replace(/\/$/, '');
+  try {
+    const parsed = new URL(String(url || '').trim());
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
+      return null;
+    }
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return null;
+  }
 };
 
 // ============ Core HTTP Client ============
@@ -134,12 +155,15 @@ export function rpcdef(ctx) {
   const baseUrl = normalizeBaseUrl(
     bindings.endpoint || bindings.baseUrl || bindings.base_url || bindings.restBaseUrl || ''
   );
-  const timeoutMs = ctx.limits?.timeoutMs || Number(bindings.timeoutMs) || DEFAULT_TIMEOUT_MS;
+  const rawTimeout = firstDefined(ctx?.limits?.timeoutMs, bindings.timeoutMs);
+  const configuredTimeout = Number(rawTimeout);
+  const timeoutMs = Number.isInteger(configuredTimeout) && configuredTimeout > 0
+    ? Math.min(configuredTimeout, MAX_TIMEOUT_MS)
+    : DEFAULT_TIMEOUT_MS;
   const baseHeaders = parseHeaders(bindings.headers);
   const meta = ctx.meta || {};
-  const skipTlsVerify = Boolean(
-    bindings.tlsInsecureSkipVerify || bindings.skipTlsVerify || bindings.skip_tls_verify
-  );
+  const skipTlsVerify = [bindings.tlsInsecureSkipVerify, bindings.skipTlsVerify, bindings.skip_tls_verify]
+    .some(toBoolean);
 
   const requestWithDefaults = (req = {}) => {
     // Protobuf3 string fields default to "" rather than undefined,
@@ -170,26 +194,77 @@ export function rpcdef(ctx) {
     'x-request-id': meta.request_id || meta.requestId || 'unknown',
   });
 
-  const tlsOptions = () => (skipTlsVerify
-    ? { insecureSkipVerify: true, tlsInsecureSkipVerify: true }
-    : {});
+  const tlsOptions = () => (skipTlsVerify ? { dispatcher: getInsecureTlsDispatcher() } : {});
+
+  const pageOrDefault = (value, field, fallback, maximum) => {
+    if (value === undefined || value === null || value === '' || Number(value) === 0) return fallback;
+    const parsed = toPositiveInt(value);
+    if (parsed === null || parsed < 1 || parsed > maximum) {
+      throw errorWithCode('INVALID_ARGUMENT', `${field} must be in [1, ${maximum}]`);
+    }
+    return parsed;
+  };
+
+  const readResponseText = async (res) => {
+    const contentLength = Number(res.headers?.get?.('content-length'));
+    if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
+      throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response exceeds maximum size');
+    }
+    if (!res.body?.getReader) {
+      const text = await res.text();
+      if (new TextEncoder().encode(text).byteLength > MAX_RESPONSE_BYTES) {
+        throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response exceeds maximum size');
+      }
+      return text;
+    }
+    const reader = res.body.getReader();
+    const chunks = [];
+    let received = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += value.byteLength;
+        if (received > MAX_RESPONSE_BYTES) {
+          await reader.cancel();
+          throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response exceeds maximum size');
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const joined = new Uint8Array(received);
+    let offset = 0;
+    for (const chunk of chunks) {
+      joined.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder().decode(joined);
+  };
 
   const fetchDongtai = async (url, init) => {
-    const signal = AbortSignal.timeout(timeoutMs);
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
     try {
-      return await fetch(url, { ...init, signal, ...tlsOptions() });
+      return await fetch(url, { ...init, signal: controller.signal, redirect: 'error', ...tlsOptions() });
     } catch (e) {
-      if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
+      if (timedOut || e?.name === 'TimeoutError' || e?.name === 'AbortError') {
         throw errorWithCode('DEADLINE_EXCEEDED', `request timed out after ${timeoutMs}ms`);
       }
-      const reason = e?.cause?.message || e?.message || 'fetch failed';
-      throw errorWithCode('UNAVAILABLE', reason);
+      throw errorWithCode('UNAVAILABLE', 'upstream request failed');
+    } finally {
+      clearTimeout(timer);
     }
   };
 
-  const throwForHttpError = (status, text) => {
-    // Log upstream response body server-side only (may contain sensitive data)
-    try { console.error(`[Huoxian_IAST_DONGTAI] upstream http ${status}: ${String(text).slice(0, 500)}`); } catch { /* ignore */ }
+  const throwForHttpError = (status) => {
+    // Never log upstream bodies: IAST errors can contain credentials, headers, or stack traces.
+    try { console.error(`[Huoxian_IAST_DONGTAI] upstream request failed with HTTP ${status}`); } catch { /* ignore */ }
     if (status === 401) throw errorWithCode('UNAUTHENTICATED', `upstream returned ${status}`);
     if (status === 403) throw errorWithCode('PERMISSION_DENIED', `upstream returned ${status}`);
     if (status >= 400 && status < 500) throw errorWithCode('FAILED_PRECONDITION', `upstream returned ${status}`);
@@ -197,8 +272,8 @@ export function rpcdef(ctx) {
   };
 
   const readJsonResponse = async (res, emptyValue) => {
-    const text = await res.text();
-    if (!res.ok) throwForHttpError(res.status, text);
+    const text = await readResponseText(res);
+    if (!res.ok) throwForHttpError(res.status);
     if (!text.trim()) return emptyValue;
     try { return JSON.parse(text); } catch {
       throw errorWithCode('UNKNOWN', 'response is not valid JSON');
@@ -209,13 +284,21 @@ export function rpcdef(ctx) {
     // Treat empty strings (protobuf3 defaults) as absent
     const token = [req?.token, req?.api_token, req?.apiToken]
       .find((v) => v !== undefined && v !== null && String(v).trim()) || '';
-    if (!token.trim()) throw errorWithCode('INVALID_ARGUMENT', 'token is required');
-    return String(token).trim();
+    const normalized = String(token).trim();
+    if (!normalized) throw errorWithCode('INVALID_ARGUMENT', 'token is required');
+    if (/[\r\n]/.test(normalized)) throw errorWithCode('INVALID_ARGUMENT', 'token must not contain line breaks');
+    return normalized.replace(/^Token\s+/i, '');
   };
 
   const requireBaseUrl = () => {
     if (!baseUrl) throw errorWithCode('INVALID_ARGUMENT', 'endpoint/baseUrl is required (http/https)');
     return baseUrl;
+  };
+
+  const requireRecordID = (rawId) => {
+    const id = toPositiveInt(rawId);
+    if (id === null || id < 1) throw errorWithCode('INVALID_ARGUMENT', 'id must be a positive integer');
+    return id;
   };
 
   // ============ API Methods ============
@@ -233,9 +316,9 @@ export function rpcdef(ctx) {
     if (vulType) params.push(`vul_type=${encodeURIComponent(vulType)}`);
     const state = pickStringField(req, ['state']);
     if (state) params.push(`state=${encodeURIComponent(state)}`);
-    const page = toPositiveInt(firstDefined(req?.page)) || DEFAULT_PAGE;
+    const page = pageOrDefault(firstDefined(req?.page), 'page', DEFAULT_PAGE, MAX_PAGE_SIZE);
     params.push(`page=${page}`);
-    const pageSize = toPositiveInt(firstDefined(req?.page_size, req?.pageSize)) || DEFAULT_PAGE_SIZE;
+    const pageSize = pageOrDefault(firstDefined(req?.page_size, req?.pageSize), 'page_size', DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
     params.push(`page_size=${pageSize}`);
 
     const url = `${base}/api/v1/vulns${params.length ? `?${params.join('&')}` : ''}`;
@@ -259,8 +342,7 @@ export function rpcdef(ctx) {
     const base = requireBaseUrl();
     const rawId = firstDefined(req?.id, req?.Id);
     if (rawId === undefined || rawId === null) throw errorWithCode('INVALID_ARGUMENT', 'id is required');
-    const id = Number(rawId);
-    if (!Number.isInteger(id) || Number.isNaN(id)) throw errorWithCode('INVALID_ARGUMENT', 'id must be an integer');
+    const id = requireRecordID(rawId);
 
     const url = `${base}/api/v1/vuln/${id}`;
     const headers = buildHeaders(token);
@@ -278,8 +360,7 @@ export function rpcdef(ctx) {
     const base = requireBaseUrl();
     const rawId = firstDefined(req?.id, req?.Id);
     if (rawId === undefined || rawId === null) throw errorWithCode('INVALID_ARGUMENT', 'id is required');
-    const id = Number(rawId);
-    if (!Number.isInteger(id) || Number.isNaN(id)) throw errorWithCode('INVALID_ARGUMENT', 'id must be an integer');
+    const id = requireRecordID(rawId);
 
     const status = String(firstDefined(req?.status) || '').trim();
     if (!status) throw errorWithCode('INVALID_ARGUMENT', 'status is required');
@@ -342,9 +423,9 @@ export function rpcdef(ctx) {
     const params = [];
     const name = pickStringField(req, ['name', 'Name']);
     if (name) params.push(`name=${encodeURIComponent(name)}`);
-    const page = toPositiveInt(firstDefined(req?.page)) || DEFAULT_PAGE;
+    const page = pageOrDefault(firstDefined(req?.page), 'page', DEFAULT_PAGE, MAX_PAGE_SIZE);
     params.push(`page=${page}`);
-    const pageSize = toPositiveInt(firstDefined(req?.page_size, req?.pageSize)) || DEFAULT_PAGE_SIZE;
+    const pageSize = pageOrDefault(firstDefined(req?.page_size, req?.pageSize), 'page_size', DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
     params.push(`page_size=${pageSize}`);
 
     const url = `${base}/api/v1/projects${params.length ? `?${params.join('&')}` : ''}`;
@@ -368,8 +449,7 @@ export function rpcdef(ctx) {
     const base = requireBaseUrl();
     const rawId = firstDefined(req?.id, req?.Id);
     if (rawId === undefined || rawId === null) throw errorWithCode('INVALID_ARGUMENT', 'id is required');
-    const id = Number(rawId);
-    if (!Number.isInteger(id) || Number.isNaN(id)) throw errorWithCode('INVALID_ARGUMENT', 'id must be an integer');
+    const id = requireRecordID(rawId);
 
     const url = `${base}/api/v1/project/${id}`;
     const headers = buildHeaders(token);
@@ -418,8 +498,7 @@ export function rpcdef(ctx) {
     const base = requireBaseUrl();
     const rawId = firstDefined(req?.id, req?.Id);
     if (rawId === undefined || rawId === null) throw errorWithCode('INVALID_ARGUMENT', 'id is required');
-    const id = Number(rawId);
-    if (!Number.isInteger(id) || Number.isNaN(id)) throw errorWithCode('INVALID_ARGUMENT', 'id must be an integer');
+    const id = requireRecordID(rawId);
 
     const url = `${base}/api/v1/project/delete`;
     const headers = buildHeaders(token);
@@ -444,9 +523,9 @@ export function rpcdef(ctx) {
     if (projectId !== null) params.push(`project_id=${projectId}`);
     const state = pickStringField(req, ['state', 'State']);
     if (state) params.push(`state=${encodeURIComponent(state)}`);
-    const page = toPositiveInt(firstDefined(req?.page)) || DEFAULT_PAGE;
+    const page = pageOrDefault(firstDefined(req?.page), 'page', DEFAULT_PAGE, MAX_PAGE_SIZE);
     params.push(`page=${page}`);
-    const pageSize = toPositiveInt(firstDefined(req?.page_size, req?.pageSize)) || DEFAULT_PAGE_SIZE;
+    const pageSize = pageOrDefault(firstDefined(req?.page_size, req?.pageSize), 'page_size', DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
     params.push(`page_size=${pageSize}`);
 
     const url = `${base}/api/v1/agents${params.length ? `?${params.join('&')}` : ''}`;
@@ -508,8 +587,7 @@ export function rpcdef(ctx) {
     const base = requireBaseUrl();
     const rawId = firstDefined(req?.id, req?.Id);
     if (rawId === undefined || rawId === null) throw errorWithCode('INVALID_ARGUMENT', 'id is required');
-    const id = Number(rawId);
-    if (!Number.isInteger(id) || Number.isNaN(id)) throw errorWithCode('INVALID_ARGUMENT', 'id must be an integer');
+    const id = requireRecordID(rawId);
 
     const url = `${base}/api/v1/sca/${id}`;
     const headers = buildHeaders(token);
@@ -583,69 +661,26 @@ export function rpcdef(ctx) {
 
   // ============ Return RPC Definitions ============
 
+  const request = ctx?.request ?? ctx?.req ?? {};
   return {
-    [LIST_VULNS_PATH]: async () => callListVulnerabilities(requestWithDefaults(ctx.req)),
-    [GET_VULN_PATH]: async () => callGetVulnerability(requestWithDefaults(ctx.req)),
-    [UPDATE_VULN_STATUS_PATH]: async () => callUpdateVulnStatus(requestWithDefaults(ctx.req)),
-    [GET_VULN_SUMMARY_PATH]: async () => callGetVulnSummary(requestWithDefaults(ctx.req)),
-    [LIST_PROJECTS_PATH]: async () => callListProjects(requestWithDefaults(ctx.req)),
-    [GET_PROJECT_PATH]: async () => callGetProject(requestWithDefaults(ctx.req)),
-    [CREATE_PROJECT_PATH]: async () => callCreateProject(requestWithDefaults(ctx.req)),
-    [DELETE_PROJECT_PATH]: async () => callDeleteProject(requestWithDefaults(ctx.req)),
-    [LIST_AGENTS_PATH]: async () => callListAgents(requestWithDefaults(ctx.req)),
-    [GET_SYSTEM_INFO_PATH]: async () => callGetSystemInfo(requestWithDefaults(ctx.req)),
-    [LIST_STRATEGIES_PATH]: async () => callListStrategies(requestWithDefaults(ctx.req)),
-    [GET_SCA_DETAIL_PATH]: async () => callGetScaDetail(requestWithDefaults(ctx.req)),
+    [LIST_VULNS_PATH]: async () => callListVulnerabilities(requestWithDefaults(request)),
+    [GET_VULN_PATH]: async () => callGetVulnerability(requestWithDefaults(request)),
+    [UPDATE_VULN_STATUS_PATH]: async () => callUpdateVulnStatus(requestWithDefaults(request)),
+    [GET_VULN_SUMMARY_PATH]: async () => callGetVulnSummary(requestWithDefaults(request)),
+    [LIST_PROJECTS_PATH]: async () => callListProjects(requestWithDefaults(request)),
+    [GET_PROJECT_PATH]: async () => callGetProject(requestWithDefaults(request)),
+    [CREATE_PROJECT_PATH]: async () => callCreateProject(requestWithDefaults(request)),
+    [DELETE_PROJECT_PATH]: async () => callDeleteProject(requestWithDefaults(request)),
+    [LIST_AGENTS_PATH]: async () => callListAgents(requestWithDefaults(request)),
+    [GET_SYSTEM_INFO_PATH]: async () => callGetSystemInfo(requestWithDefaults(request)),
+    [LIST_STRATEGIES_PATH]: async () => callListStrategies(requestWithDefaults(request)),
+    [GET_SCA_DETAIL_PATH]: async () => callGetScaDetail(requestWithDefaults(request)),
   };
 }
 
 // ============ SDK Handler Registration ============
 
-const mergeCtx = (baseCtx, innerCtx) => ({
-  ...(baseCtx ?? {}),
-  ...(innerCtx ?? {}),
-  bindings: { ...(baseCtx?.bindings ?? {}), ...(innerCtx?.bindings ?? {}) },
-  config: { ...(baseCtx?.config ?? {}), ...(innerCtx?.config ?? {}) },
-  secret: { ...(baseCtx?.secret ?? {}), ...(innerCtx?.secret ?? {}) },
-  limits: innerCtx?.limits ?? baseCtx?.limits ?? {},
-  meta: innerCtx?.meta ?? baseCtx?.meta ?? {},
-  metadata: innerCtx?.metadata ?? baseCtx?.metadata ?? {},
-  getMetadata: innerCtx?.getMetadata ?? baseCtx?.getMetadata,
-});
-
-const resolveCallContext = (baseCtx, reqOrCtx, maybeInnerCtx) => {
-  if (maybeInnerCtx !== undefined) {
-    return { req: reqOrCtx ?? {}, ctx: mergeCtx(baseCtx, maybeInnerCtx) };
-  }
-  const innerCtx = reqOrCtx ?? {};
-  return {
-    req: innerCtx.request ?? innerCtx.req ?? {},
-    ctx: mergeCtx(baseCtx, innerCtx),
-  };
-};
-
-const wrapLegacyHandler = (baseCtx, methodPath) => async (reqOrCtx, maybeInnerCtx) => {
-  const call = resolveCallContext(baseCtx, reqOrCtx, maybeInnerCtx);
-  const legacyCtx = { ...call.ctx, req: call.req };
-  return rpcdef(legacyCtx)[methodPath]();
-};
-
-const registerHandlers = (ctx = {}) => ({
-  [LIST_VULNS_PATH]: wrapLegacyHandler(ctx, LIST_VULNS_PATH),
-  [GET_VULN_PATH]: wrapLegacyHandler(ctx, GET_VULN_PATH),
-  [UPDATE_VULN_STATUS_PATH]: wrapLegacyHandler(ctx, UPDATE_VULN_STATUS_PATH),
-  [GET_VULN_SUMMARY_PATH]: wrapLegacyHandler(ctx, GET_VULN_SUMMARY_PATH),
-  [LIST_PROJECTS_PATH]: wrapLegacyHandler(ctx, LIST_PROJECTS_PATH),
-  [GET_PROJECT_PATH]: wrapLegacyHandler(ctx, GET_PROJECT_PATH),
-  [CREATE_PROJECT_PATH]: wrapLegacyHandler(ctx, CREATE_PROJECT_PATH),
-  [DELETE_PROJECT_PATH]: wrapLegacyHandler(ctx, DELETE_PROJECT_PATH),
-  [LIST_AGENTS_PATH]: wrapLegacyHandler(ctx, LIST_AGENTS_PATH),
-  [GET_SYSTEM_INFO_PATH]: wrapLegacyHandler(ctx, GET_SYSTEM_INFO_PATH),
-  [LIST_STRATEGIES_PATH]: wrapLegacyHandler(ctx, LIST_STRATEGIES_PATH),
-  [GET_SCA_DETAIL_PATH]: wrapLegacyHandler(ctx, GET_SCA_DETAIL_PATH),
-});
-
-const sdkHandlers = registerHandlers({});
+const wrapHandler = (methodPath) => async (ctx) => rpcdef(ctx)[methodPath]();
 
 export const METHOD_LIST_VULNS_FULL = 'Huoxian_IAST_DONGTAI.Huoxian_IAST_DONGTAI/ListVulnerabilities';
 export const METHOD_GET_VULN_FULL = 'Huoxian_IAST_DONGTAI.Huoxian_IAST_DONGTAI/GetVulnerability';
@@ -661,18 +696,18 @@ export const METHOD_LIST_STRATEGIES_FULL = 'Huoxian_IAST_DONGTAI.Huoxian_IAST_DO
 export const METHOD_GET_SCA_DETAIL_FULL = 'Huoxian_IAST_DONGTAI.Huoxian_IAST_DONGTAI/GetScaDetail';
 
 export const handlers = {
-  [METHOD_LIST_VULNS_FULL]: (ctx) => sdkHandlers[LIST_VULNS_PATH](ctx),
-  [METHOD_GET_VULN_FULL]: (ctx) => sdkHandlers[GET_VULN_PATH](ctx),
-  [METHOD_UPDATE_VULN_STATUS_FULL]: (ctx) => sdkHandlers[UPDATE_VULN_STATUS_PATH](ctx),
-  [METHOD_GET_VULN_SUMMARY_FULL]: (ctx) => sdkHandlers[GET_VULN_SUMMARY_PATH](ctx),
-  [METHOD_LIST_PROJECTS_FULL]: (ctx) => sdkHandlers[LIST_PROJECTS_PATH](ctx),
-  [METHOD_GET_PROJECT_FULL]: (ctx) => sdkHandlers[GET_PROJECT_PATH](ctx),
-  [METHOD_CREATE_PROJECT_FULL]: (ctx) => sdkHandlers[CREATE_PROJECT_PATH](ctx),
-  [METHOD_DELETE_PROJECT_FULL]: (ctx) => sdkHandlers[DELETE_PROJECT_PATH](ctx),
-  [METHOD_LIST_AGENTS_FULL]: (ctx) => sdkHandlers[LIST_AGENTS_PATH](ctx),
-  [METHOD_GET_SYSTEM_INFO_FULL]: (ctx) => sdkHandlers[GET_SYSTEM_INFO_PATH](ctx),
-  [METHOD_LIST_STRATEGIES_FULL]: (ctx) => sdkHandlers[LIST_STRATEGIES_PATH](ctx),
-  [METHOD_GET_SCA_DETAIL_FULL]: (ctx) => sdkHandlers[GET_SCA_DETAIL_PATH](ctx),
+  [METHOD_LIST_VULNS_FULL]: wrapHandler(LIST_VULNS_PATH),
+  [METHOD_GET_VULN_FULL]: wrapHandler(GET_VULN_PATH),
+  [METHOD_UPDATE_VULN_STATUS_FULL]: wrapHandler(UPDATE_VULN_STATUS_PATH),
+  [METHOD_GET_VULN_SUMMARY_FULL]: wrapHandler(GET_VULN_SUMMARY_PATH),
+  [METHOD_LIST_PROJECTS_FULL]: wrapHandler(LIST_PROJECTS_PATH),
+  [METHOD_GET_PROJECT_FULL]: wrapHandler(GET_PROJECT_PATH),
+  [METHOD_CREATE_PROJECT_FULL]: wrapHandler(CREATE_PROJECT_PATH),
+  [METHOD_DELETE_PROJECT_FULL]: wrapHandler(DELETE_PROJECT_PATH),
+  [METHOD_LIST_AGENTS_FULL]: wrapHandler(LIST_AGENTS_PATH),
+  [METHOD_GET_SYSTEM_INFO_FULL]: wrapHandler(GET_SYSTEM_INFO_PATH),
+  [METHOD_LIST_STRATEGIES_FULL]: wrapHandler(LIST_STRATEGIES_PATH),
+  [METHOD_GET_SCA_DETAIL_FULL]: wrapHandler(GET_SCA_DETAIL_PATH),
 };
 
 export const _test = {

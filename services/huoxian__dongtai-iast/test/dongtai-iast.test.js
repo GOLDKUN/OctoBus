@@ -46,7 +46,7 @@ describe('Utility Functions', () => {
     assert.equal(toPositiveInt(100), 100);
     assert.equal(toPositiveInt({ value: 42 }), 42);
     assert.equal(toPositiveInt(0), 0);
-    assert.equal(toPositiveInt(-1), -1);
+    assert.equal(toPositiveInt(-1), null);
     assert.equal(toPositiveInt(null), null);
     assert.equal(toPositiveInt(undefined), null);
     assert.equal(toPositiveInt('abc'), null);
@@ -348,10 +348,11 @@ describe('Error Handling', () => {
     globalThis.fetch = originalFetch;
   });
 
-  const makeCtx = (req = {}) => ({
+  const makeCtx = (req = {}, overrides = {}) => ({
     config: { endpoint: MOCK_BASE_URL },
     secret: { apiToken: MOCK_TOKEN },
     req,
+    ...overrides,
   });
 
   it('should throw UNAUTHENTICATED for 401', async () => {
@@ -420,6 +421,84 @@ describe('Error Handling', () => {
       () => handler(makeCtx({ id: 1, status: 'invalid_status' })),
       (err) => err.message.includes('INVALID_ARGUMENT') && err.message.includes('status')
     );
+  });
+
+  it('rejects negative identifiers and out-of-range pages before making an upstream request', async () => {
+    globalThis.fetch = mock.fn(async () => createMockResponse({ status: 201 }));
+    await assert.rejects(
+      () => handlers[METHOD_GET_PROJECT_FULL](makeCtx({ id: -1 })),
+      (err) => err.message.includes('INVALID_ARGUMENT') && err.message.includes('positive integer'),
+    );
+    await assert.rejects(
+      () => handlers[METHOD_LIST_VULNS_FULL](makeCtx({ page: -1 })),
+      (err) => err.message.includes('INVALID_ARGUMENT') && err.message.includes('page'),
+    );
+    await assert.rejects(
+      () => handlers[METHOD_LIST_VULNS_FULL](makeCtx({ page_size: 1001 })),
+      (err) => err.message.includes('INVALID_ARGUMENT') && err.message.includes('page_size'),
+    );
+    assert.equal(globalThis.fetch.mock.callCount(), 0);
+  });
+
+  it('uses a bounded AbortController timeout and disables redirect following', async () => {
+    globalThis.fetch = mock.fn(async (_url, init) => createMockResponse({ status: 201, data: [], page: {} }));
+    await handlers[METHOD_LIST_VULNS_FULL](makeCtx());
+    const init = globalThis.fetch.mock.calls[0].arguments[1];
+    assert.equal(init.redirect, 'error');
+    assert.ok(init.signal instanceof AbortSignal);
+
+    globalThis.fetch = mock.fn(async (_url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    }));
+    await assert.rejects(
+      () => handlers[METHOD_LIST_VULNS_FULL](makeCtx({ timeoutMs: undefined, }, { limits: { timeoutMs: 1 } })),
+      (err) => err.message.includes('DEADLINE_EXCEEDED'),
+    );
+  });
+
+  it('uses an undici dispatcher only when TLS verification is explicitly disabled', async () => {
+    globalThis.fetch = mock.fn(async () => createMockResponse({ status: 201, data: [], page: {} }));
+    await handlers[METHOD_LIST_VULNS_FULL]({
+      config: { endpoint: MOCK_BASE_URL, skipTlsVerify: true }, secret: { apiToken: MOCK_TOKEN }, req: {},
+    });
+    const insecureInit = globalThis.fetch.mock.calls[0].arguments[1];
+    assert.ok(insecureInit.dispatcher);
+    assert.equal(Object.hasOwn(insecureInit, 'insecureSkipVerify'), false);
+    assert.equal(Object.hasOwn(insecureInit, 'tlsInsecureSkipVerify'), false);
+
+    globalThis.fetch = mock.fn(async () => createMockResponse({ status: 201, data: [], page: {} }));
+    await handlers[METHOD_LIST_VULNS_FULL]({
+      config: { endpoint: MOCK_BASE_URL, skipTlsVerify: 'false' }, secret: { apiToken: MOCK_TOKEN }, req: {},
+    });
+    assert.equal(Object.hasOwn(globalThis.fetch.mock.calls[0].arguments[1], 'dispatcher'), false);
+  });
+
+  it('does not expose or log upstream response bodies', async () => {
+    const secret = 'super-secret-upstream-body';
+    const originalError = console.error;
+    const logs = [];
+    console.error = (...args) => logs.push(args.join(' '));
+    globalThis.fetch = mock.fn(async () => ({
+      ok: false, status: 500, headers: { get: () => 'text/plain' }, text: async () => secret,
+    }));
+    try {
+      await assert.rejects(
+        () => handlers[METHOD_LIST_VULNS_FULL](makeCtx()),
+        (err) => err.message.includes('UNAVAILABLE') && !err.message.includes(secret),
+      );
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(logs.some((entry) => entry.includes(secret)), false);
+  });
+
+  it('accepts the SDK single-context ABI with ctx.request', async () => {
+    globalThis.fetch = mock.fn(async () => createMockResponse({ status: 201, data: [], page: {} }));
+    const result = await handlers[METHOD_LIST_VULNS_FULL]({
+      config: { endpoint: MOCK_BASE_URL }, secret: { apiToken: MOCK_TOKEN }, request: { page: 2 },
+    });
+    assert.deepEqual(result.vulns, []);
+    assert.equal(handlers[METHOD_LIST_VULNS_FULL].length, 1);
   });
 });
 
