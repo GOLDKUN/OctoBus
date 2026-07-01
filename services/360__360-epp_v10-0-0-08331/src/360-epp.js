@@ -99,8 +99,7 @@ class EppSession {
     const newUsername = bindings.username || '';
     const newPassword = bindings.password || '';
 
-    if ((newUsername && this.configuredUsername && newUsername !== this.configuredUsername) ||
-        (newPassword && this.configuredPassword && newPassword !== this.configuredPassword)) {
+    if (newUsername !== this.configuredUsername || newPassword !== this.configuredPassword) {
       this.cookie = null;
     }
     this.configuredUsername = newUsername;
