@@ -2,18 +2,16 @@ import { JianweiClient } from "./jianwei-client.js";
 function getClient(ctx) {
     const config = ctx.config;
     const secret = ctx.secret;
-    return new JianweiClient(config.baseUrl, secret.token);
+    return new JianweiClient(config.baseUrl, secret.token, {
+        skipTlsVerify: config.skipTlsVerify,
+    });
 }
-// Transform gRPC filter objects to Jianwei API params by stripping wrapper arrays
 function transformFilter(filter) {
     if (!filter)
         return {};
     const result = {};
     for (const [key, value] of Object.entries(filter)) {
-        if (Array.isArray(value)) {
-            result[key] = value;
-        }
-        else if (value !== null && value !== undefined) {
+        if (value !== null && value !== undefined) {
             result[key] = value;
         }
     }

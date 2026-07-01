@@ -41,48 +41,33 @@ export class JianweiHttpError extends Error {
         this.statusCode = statusCode;
     }
 }
+let _insecureAgent;
+function getInsecureAgent() {
+    if (!_insecureAgent) {
+        const { Agent } = require("undici");
+        _insecureAgent = new Agent({ connect: { rejectUnauthorized: false } });
+    }
+    return _insecureAgent;
+}
 /**
  * Client for the Jianwei Vulnerability Management Platform's JSON-RPC 2.0 API.
  *
- * Sends real HTTP POST requests using the native fetch API, with Bearer token
- * authentication in the Authorization header.
- *
- * Usage:
- *   const client = new JianweiClient("https://your-jianwei-host", "<your-api-token>");
- *   const result = await client.call("AssetMgrService.ListAssets", { page: 1, page_size: 10 });
- *
- * Note: baseUrl should be the platform root URL (e.g. "https://your-jianwei-host"),
- *       NOT the web UI path ("/insight"). The API endpoint is at /pedestal/rpc
- *       which is separate from the web frontend. The /insight suffix is stripped
- *       automatically if present.
+ * When `skipTlsVerify` is true, an undici Agent with `rejectUnauthorized: false`
+ * is used as the fetch dispatcher, allowing connections to servers with
+ * self-signed certificates.
  */
 export class JianweiClient {
     baseUrl;
     token;
+    skipTlsVerify;
     retryOptions;
     nextId = 1;
-    constructor(baseUrl, token, retryOptions) {
-        // Strip /insight suffix if present — the API endpoint is at /pedestal/rpc,
-        // not under the /insight web UI path
+    constructor(baseUrl, token, options) {
         this.baseUrl = baseUrl.replace(/\/+$/, "").replace(/\/insight\/?$/, "");
         this.token = token;
-        this.retryOptions = { ...DEFAULT_RETRY_OPTIONS, ...retryOptions };
+        this.skipTlsVerify = options?.skipTlsVerify ?? false;
+        this.retryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options?.retryOptions };
     }
-    /**
-     * Invoke a JSON-RPC 2.0 method on the Jianwei platform.
-     *
-     * Sends a JSON-RPC request to the single `/pedestal/rpc` endpoint with
-     * Bearer token auth, and returns the `result` field from the success response.
-     *
-     * The method name is carried in the JSON-RPC body (not the URL path).
-     *
-     * Throws JianweiRpcError on JSON-RPC-level errors (method not found, invalid
-     * params, etc.) and JianweiHttpError on HTTP-level failures (auth failures,
-     * server errors, network issues).
-     *
-     * Transient HTTP failures (429, 5xx) are retried automatically up to
-     * maxRetries times with exponential backoff.
-     */
     async call(method, params = {}) {
         const request = {
             jsonrpc: "2.0",
@@ -91,17 +76,21 @@ export class JianweiClient {
             id: this.nextId++,
         };
         const url = `${this.baseUrl}/pedestal/rpc`;
+        const fetchOptions = {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${this.token}`,
+            },
+            body: JSON.stringify(request),
+        };
+        if (this.skipTlsVerify) {
+            fetchOptions.dispatcher = getInsecureAgent();
+        }
         let lastError = null;
         for (let attempt = 0; attempt <= this.retryOptions.maxRetries; attempt++) {
             try {
-                const response = await fetch(url, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        Authorization: `Bearer ${this.token}`,
-                    },
-                    body: JSON.stringify(request),
-                });
+                const response = await fetch(url, fetchOptions);
                 if (!response.ok) {
                     const isRetryable = this.retryOptions.retryableStatusCodes.includes(response.status);
                     if (isRetryable && attempt < this.retryOptions.maxRetries) {
@@ -130,7 +119,6 @@ export class JianweiClient {
                     }
                     throw error;
                 }
-                // Network errors (fetch itself threw) — retryable
                 if (attempt < this.retryOptions.maxRetries) {
                     lastError = error instanceof Error ? error : new Error(String(error));
                     await this.delay(this.retryOptions.retryDelayMs * Math.pow(2, attempt));
