@@ -3,8 +3,11 @@
 // Auth: apiKey (preferred Bearer), username+password (Basic fallback)
 
 import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
+import { Agent as UndiciAgent } from 'undici';
 
 const DEFAULT_TIMEOUT_MS = 5000;
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const SECURE_DISPATCHER = new UndiciAgent({ connect: { rejectUnauthorized: true } });
 
 const METHOD_LIST_ANALYZERS = '/TheHive_CORTEX.TheHive_CORTEX/ListAnalyzers';
 const METHOD_ANALYZE_OBSERVABLE = '/TheHive_CORTEX.TheHive_CORTEX/AnalyzeObservable';
@@ -17,6 +20,7 @@ const grpcCodeFor = (code) => ({
   FAILED_PRECONDITION: grpcStatus.FAILED_PRECONDITION,
   UNAUTHENTICATED: grpcStatus.UNAUTHENTICATED,
   PERMISSION_DENIED: grpcStatus.PERMISSION_DENIED,
+  RESOURCE_EXHAUSTED: grpcStatus.RESOURCE_EXHAUSTED,
   UNAVAILABLE: grpcStatus.UNAVAILABLE,
   DEADLINE_EXCEEDED: grpcStatus.DEADLINE_EXCEEDED,
 })[code] ?? grpcStatus.UNKNOWN;
@@ -29,6 +33,11 @@ const errorWithCode = (code, message) => {
 
 const firstDefined = (...vals) => vals.find((v) => v !== undefined && v !== null && v !== '');
 
+const BLOCKED_HEADER_NAMES = new Set([
+  'authorization', 'connection', 'content-length', 'content-type', 'host',
+  'proxy-authorization', 'transfer-encoding',
+]);
+
 const mergedBindings = (ctx = {}) => ({
   ...(ctx?.config ?? {}),
   ...(ctx?.secret ?? {}),
@@ -37,11 +46,11 @@ const mergedBindings = (ctx = {}) => ({
 
 const parseHeaders = (value) => {
   if (value === undefined || value === null || value === '') return {};
-  if (typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value === 'object' && !Array.isArray(value)) return sanitizeHeaders(value);
   if (typeof value === 'string') {
     try {
       const parsed = JSON.parse(value);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return sanitizeHeaders(parsed);
     } catch {
       return {};
     }
@@ -49,10 +58,67 @@ const parseHeaders = (value) => {
   return {};
 };
 
+const sanitizeHeaders = (headers) => {
+  const safe = {};
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    if (!BLOCKED_HEADER_NAMES.has(name.toLowerCase()) && typeof value === 'string') safe[name] = value;
+  }
+  return safe;
+};
+
 const normalizeBaseUrl = (url) => {
-  const base = String(url || '').trim();
-  if (!/^https?:\/\//i.test(base)) return null;
-  return base.replace(/\/$/, '');
+  try {
+    const parsed = new URL(String(url || '').trim());
+    const loopback = ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname);
+    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) return null;
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) return null;
+    parsed.pathname = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return null;
+  }
+};
+
+const resolveTimeoutMs = (value) => {
+  if (value === undefined || value === null || value === '') return DEFAULT_TIMEOUT_MS;
+  const timeout = Number(value);
+  if (!Number.isSafeInteger(timeout) || timeout < 1) {
+    throw errorWithCode('INVALID_ARGUMENT', 'timeoutMs must be a positive integer');
+  }
+  return timeout;
+};
+
+const readResponseText = async (response) => {
+  const declared = Number(response.headers?.get?.('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
+    throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response exceeds the 4 MiB limit');
+  }
+  if (!response.body?.getReader) {
+    const text = String(await response.text());
+    if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) {
+      throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response exceeds the 4 MiB limit');
+    }
+    return text;
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response exceeds the 4 MiB limit');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
 };
 
 const toPositiveInt = (val) => {
@@ -108,10 +174,9 @@ const pickStringField = (req, keys) => {
 export function rpcdef(ctx) {
   const bindings = mergedBindings(ctx);
   const restBaseUrl = bindings.restBaseUrl || bindings.rest_base_url || bindings.baseUrl || bindings.base_url || bindings.endpoint || '';
-  const timeoutMs = Number(bindings.timeoutMs) || ctx.limits?.timeoutMs || DEFAULT_TIMEOUT_MS;
+  const timeoutMs = resolveTimeoutMs(bindings.timeoutMs ?? ctx.limits?.timeoutMs);
   const baseHeaders = parseHeaders(bindings.headers);
   const meta = ctx.meta || {};
-  const skipTlsVerify = Boolean(bindings.tlsInsecureSkipVerify || bindings.skipTlsVerify || bindings.skip_tls_verify || bindings.tls_insecure_skip_verify);
 
   const requestWithDefaults = (req = {}) => {
     const apiKey = firstDefined(req?.api_key, req?.apiKey, bindings.api_key, bindings.apiKey);
@@ -132,11 +197,7 @@ export function rpcdef(ctx) {
     if (inst) trace.push(`inst=${inst}`);
     if (reqId) trace.push(`req=${reqId}`);
     const prefix = `[TheHive_CORTEX][${action}]${trace.length ? `[${trace.join(' ')}]` : ''}`;
-    try {
-      console.log(prefix, JSON.stringify(details));
-    } catch {
-      console.log(prefix, details);
-    }
+    console.log(prefix, details);
   };
 
   const buildHeaders = (authInfo, withContentType = true) => {
@@ -159,38 +220,32 @@ export function rpcdef(ctx) {
       const username = firstDefined(authInfo?.username);
       const password = firstDefined(authInfo?.password);
       if (username && password) {
-        headers['Authorization'] = `Basic ${btoa(`${username}:${password}`)}`;
+        headers['Authorization'] = `Basic ${Buffer.from(`${username}:${password}`, 'utf8').toString('base64')}`;
       }
     }
     return headers;
   };
-
-  const tlsOptions = () => (skipTlsVerify
-    ? {
-        insecureSkipVerify: true,
-        tlsInsecureSkipVerify: true,
-      }
-    : {});
 
   const fetchCortex = async (url, init) => {
     try {
       return await fetch(url, {
         ...init,
         signal: init?.signal ?? AbortSignal.timeout(timeoutMs),
-        ...tlsOptions(),
+        dispatcher: SECURE_DISPATCHER,
+        redirect: 'error',
       });
     } catch (e) {
+      if (e instanceof GrpcError) throw e;
       if (e?.name === 'TimeoutError' || e?.cause?.name === 'TimeoutError') {
         throw errorWithCode('DEADLINE_EXCEEDED', `request timed out after ${timeoutMs}ms`);
       }
-      const reason = e?.cause?.message || e?.message || 'fetch failed';
-      throw errorWithCode('UNAVAILABLE', reason);
+      throw errorWithCode('UNAVAILABLE', 'upstream request failed');
     }
   };
 
-  const throwForHttpError = (status, text) => {
-    // Log upstream body server-side only; never include it in gRPC error details.
-    try { console.log(`[TheHive_CORTEX][http-error] upstream ${status}: ${String(text).slice(0, 512)}`); } catch {}
+  const throwForHttpError = (status) => {
+    // Do not log response bodies: they can contain credentials or observables.
+    console.log(`[TheHive_CORTEX][http-error] upstream status=${status}`);
     if (status === 401) {
       throw errorWithCode('UNAUTHENTICATED', `upstream http ${status}`);
     }
@@ -204,10 +259,10 @@ export function rpcdef(ctx) {
   };
 
   const readJsonResponse = async (res, emptyValue) => {
-    const text = await res.text();
+    const text = await readResponseText(res);
     const contentType = res.headers.get('content-type') || '';
     if (!res.ok) {
-      throwForHttpError(res.status, text);
+      throwForHttpError(res.status);
     }
     if (!text.trim()) {
       return emptyValue;
@@ -320,7 +375,7 @@ export function rpcdef(ctx) {
     const url = `${baseUrl}/api/analyzer/${encodeURIComponent(analyzerId)}/run`;
     const headers = buildHeaders(req);
 
-    logFlow('AnalyzeObservable:start', { analyzerId, dataType, data });
+    logFlow('AnalyzeObservable:start', { analyzerId, dataType });
     const res = await fetchCortex(url, {
       method: 'POST',
       headers,
@@ -611,16 +666,7 @@ export const _test = {
   resolveCallContext,
   toPositiveInt,
   toValue,
-  buildHeaders: (ctx) => {
-    const bindings = mergedBindings(ctx);
-    return rpcdef(ctx).buildHeaders ?? (() => {
-      const baseHeaders = parseHeaders(bindings.headers);
-      const apiKey = bindings.apiKey || bindings.api_key;
-      if (apiKey) return { ...baseHeaders, 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/json', 'Content-Type': 'application/json' };
-      const username = bindings.username;
-      const password = bindings.password;
-      if (username && password) return { ...baseHeaders, 'Authorization': `Basic ${btoa(`${username}:${password}`)}`, 'Accept': 'application/json', 'Content-Type': 'application/json' };
-      return { ...baseHeaders, 'Accept': 'application/json', 'Content-Type': 'application/json' };
-    });
-  },
+  readResponseText,
+  resolveTimeoutMs,
+  sanitizeHeaders,
 };

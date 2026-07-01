@@ -12,7 +12,7 @@ octobus service import --id cortex ./services/thehive__cortex
 
 - `service.json`: OctoBus service manifest.
 - `proto/cortex.proto`: gRPC API definition.
-- `config.schema.json`: non-secret endpoint, headers, timeout, and TLS settings.
+- `config.schema.json`: non-secret endpoint, headers, and timeout settings.
 - `secret.schema.json`: Cortex API key or Basic Auth credentials.
 - `src/cortex.js`: Cortex REST proxy implementation.
 - `src/service.js`: OctoBus SDK `defineService` wrapper.
@@ -30,8 +30,7 @@ Use `endpoint` for the Cortex REST API base URL. Legacy aliases `restBaseUrl`, `
   "headers": {
     "X-Extra": "demo"
   },
-  "timeoutMs": 5000,
-  "skipTlsVerify": false
+  "timeoutMs": 5000
 }
 ```
 
@@ -99,7 +98,10 @@ Cortex supports the following observable `data_type` values:
 - `ListJobs` calls `GET /api/job` with query parameters `dataTypeFilter`, `dataFilter`, `analyzerFilter`, `range`.
 - `GetJobStatus` calls `GET /api/job/:jobId` for single status or `POST /api/job/status` for batch status.
 - Auth priority: request `api_key` → secret `apiKey` (Bearer) → secret `username`/`password` (Basic).
-- HTTP 401/403 maps to `PERMISSION_DENIED`.
+- TLS certificate verification is always enabled. For private CAs, install the CA in the runtime trust store (for Node, `NODE_EXTRA_CA_CERTS` is supported).
+- Redirects are rejected to prevent credentials being forwarded to another origin.
+- Responses are limited to 4 MiB.
+- HTTP 401 maps to `UNAUTHENTICATED`; 403 maps to `PERMISSION_DENIED`.
 - Other HTTP 4xx responses map to `FAILED_PRECONDITION`.
 - HTTP 5xx, network, and TLS failures map to `UNAVAILABLE`.
 - Non-JSON success bodies map to `UNKNOWN`.
