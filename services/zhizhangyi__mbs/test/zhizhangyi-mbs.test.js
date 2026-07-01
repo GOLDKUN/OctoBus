@@ -262,9 +262,11 @@ test('DelUsers treats string type zero as userIds mode', async () => {
   await rpcdef(buildCtx({ type: '0', user_ids: ['user-1'] }))[DEL_USERS]();
 
   assert.equal(captured.url, 'https://mbs.example/uusafe/mos/thirdaccess/rest/opt/v1/delUsers');
-  assert.deepEqual(JSON.parse(captured.init.body).userIds, ['user-1']);
-  assert.equal(JSON.parse(captured.init.body).type, 0);
-  assert.equal(Object.hasOwn(JSON.parse(captured.init.body), 'condition'), false);
+  const body = JSON.parse(captured.init.body);
+  assert.deepEqual(body.userIds, ['user-1']);
+  assert.equal(body.type, 0);
+  assert.equal(body.sign, signCalc('secretkey', 'appkey', 'org', 'user-1', 0));
+  assert.equal(Object.hasOwn(body, 'condition'), false);
 });
 
 test('DelUsers requires condition for type one before calling upstream', async () => {
@@ -472,10 +474,12 @@ test('StateUsers treats string type zero as userIds mode', async () => {
   await rpcdef(buildCtx({ type: '0', state: '1', user_ids: ['user-1'] }))[STATE_USERS]();
 
   assert.equal(captured.url, 'https://mbs.example/uusafe/mos/thirdaccess/rest/opt/v1/stateUsers');
-  assert.deepEqual(JSON.parse(captured.init.body).userIds, ['user-1']);
-  assert.equal(JSON.parse(captured.init.body).type, 0);
-  assert.equal(JSON.parse(captured.init.body).state, '1');
-  assert.equal(Object.hasOwn(JSON.parse(captured.init.body), 'condition'), false);
+  const body = JSON.parse(captured.init.body);
+  assert.deepEqual(body.userIds, ['user-1']);
+  assert.equal(body.type, 0);
+  assert.equal(body.state, '1');
+  assert.equal(body.sign, signCalc('secretkey', 'appkey', 'org', 'user-1', 0, '1', ''));
+  assert.equal(Object.hasOwn(body, 'condition'), false);
 });
 
 test('DetailUser requires user_id before calling upstream', async () => {
