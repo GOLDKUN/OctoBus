@@ -131,6 +131,7 @@ export function rpcdef(ctx) {
     const oc = first(req?.org_code, req?.orgCode) || ocDef; const apk = first(req?.appkey) || ak;
     const tp = Number(first(req?.type) ?? 0); const uids = arr(first(req?.user_ids, req?.userIds));
     const did = first(req?.condition?.dept_id, req?.condition?.deptId) || '';
+    if (tp === 0 && uids.length === 0) throw er('INVALID_ARGUMENT', 'user_ids required for type=0');
     const sg = first(req?.sign) || signCalc(sk, apk, oc, uids.join(','), tp, did);
     const body = { type: tp, orgCode: oc, appkey: apk, sign: sg };
     if (tp === 0) { body.userIds = uids; } else { const c = buildCond(req?.condition); if (Object.keys(c).length > 0) body.condition = c; }
@@ -145,6 +146,7 @@ export function rpcdef(ctx) {
     if (st === undefined || st === null) throw er('INVALID_ARGUMENT', 'state required');
     const uids = arr(first(req?.user_ids, req?.userIds));
     const did = first(req?.condition?.dept_id, req?.condition?.deptId) || '';
+    if (tp === 0 && uids.length === 0) throw er('INVALID_ARGUMENT', 'user_ids required for type=0');
     const sg = first(req?.sign) || signCalc(sk, apk, oc, uids.join(','), tp, st, did);
     const body = { type: tp, state: st, orgCode: oc, appkey: apk, sign: sg };
     if (tp === 0) { body.userIds = uids; } else { const c = buildCond(req?.condition); if (Object.keys(c).length > 0) body.condition = c; }

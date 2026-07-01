@@ -185,6 +185,48 @@ test('StateUsers requires explicit state before calling upstream', async () => {
   assert.equal(called, false);
 });
 
+test('DelUsers requires user_ids for type zero before calling upstream', async () => {
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return { ok: true, status: 200, text: async () => '{"code":0}' };
+  };
+
+  await assert.rejects(
+    () => rpcdef(buildCtx({ type: 0, user_ids: [] }))[DEL_USERS](),
+    (err) => {
+      assert.ok(err instanceof GrpcError);
+      assert.equal(err.code, grpcStatus.INVALID_ARGUMENT);
+      assert.equal(err.legacyCode, 'INVALID_ARGUMENT');
+      assert.match(err.message, /user_ids required for type=0/);
+      return true;
+    },
+  );
+
+  assert.equal(called, false);
+});
+
+test('StateUsers requires user_ids for type zero before calling upstream', async () => {
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return { ok: true, status: 200, text: async () => '{"code":0}' };
+  };
+
+  await assert.rejects(
+    () => rpcdef(buildCtx({ type: 0, state: 1, user_ids: [] }))[STATE_USERS](),
+    (err) => {
+      assert.ok(err instanceof GrpcError);
+      assert.equal(err.code, grpcStatus.INVALID_ARGUMENT);
+      assert.equal(err.legacyCode, 'INVALID_ARGUMENT');
+      assert.match(err.message, /user_ids required for type=0/);
+      return true;
+    },
+  );
+
+  assert.equal(called, false);
+});
+
 test('DelUsers treats string type zero as userIds mode', async () => {
   let captured;
   globalThis.fetch = async (url, init) => {
