@@ -262,6 +262,48 @@ test('DelUsers treats string type zero as userIds mode', async () => {
   assert.equal(Object.hasOwn(JSON.parse(captured.init.body), 'condition'), false);
 });
 
+test('DelUsers requires condition for type one before calling upstream', async () => {
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return { ok: true, status: 200, text: async () => '{"code":0}' };
+  };
+
+  await assert.rejects(
+    () => rpcdef(buildCtx({ type: 1 }))[DEL_USERS](),
+    (err) => {
+      assert.ok(err instanceof GrpcError);
+      assert.equal(err.code, grpcStatus.INVALID_ARGUMENT);
+      assert.equal(err.legacyCode, 'INVALID_ARGUMENT');
+      assert.match(err.message, /condition required for type=1/);
+      return true;
+    },
+  );
+
+  assert.equal(called, false);
+});
+
+test('StateUsers requires condition for type one before calling upstream', async () => {
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return { ok: true, status: 200, text: async () => '{"code":0}' };
+  };
+
+  await assert.rejects(
+    () => rpcdef(buildCtx({ type: 1, state: 1, condition: {} }))[STATE_USERS](),
+    (err) => {
+      assert.ok(err instanceof GrpcError);
+      assert.equal(err.code, grpcStatus.INVALID_ARGUMENT);
+      assert.equal(err.legacyCode, 'INVALID_ARGUMENT');
+      assert.match(err.message, /condition required for type=1/);
+      return true;
+    },
+  );
+
+  assert.equal(called, false);
+});
+
 test('DelUsers condition mode preserves falsy condition filters', async () => {
   let captured;
   globalThis.fetch = async (url, init) => {

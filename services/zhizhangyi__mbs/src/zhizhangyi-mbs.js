@@ -133,6 +133,7 @@ export function rpcdef(ctx) {
     const tp = Number(first(req?.type) ?? 0); const uids = arr(first(req?.user_ids, req?.userIds));
     const c = buildCond(req?.condition);
     if (tp === 0 && uids.length === 0) throw er('INVALID_ARGUMENT', 'user_ids required for type=0');
+    if (tp === 1 && Object.keys(c).length === 0) throw er('INVALID_ARGUMENT', 'condition required for type=1');
     const sg = first(req?.sign) || signCalc(sk, apk, oc, uids.join(','), tp, c.keyWord ?? '', c.status ?? '', c.isMdm ?? '', c.deptId ?? '');
     const body = { type: tp, orgCode: oc, appkey: apk, sign: sg };
     if (tp === 0) { body.userIds = uids; } else if (Object.keys(c).length > 0) body.condition = c;
@@ -148,6 +149,7 @@ export function rpcdef(ctx) {
     const uids = arr(first(req?.user_ids, req?.userIds));
     const c = buildCond(req?.condition);
     if (tp === 0 && uids.length === 0) throw er('INVALID_ARGUMENT', 'user_ids required for type=0');
+    if (tp === 1 && Object.keys(c).length === 0) throw er('INVALID_ARGUMENT', 'condition required for type=1');
     const sg = first(req?.sign) || signCalc(sk, apk, oc, uids.join(','), tp, st, c.keyWord ?? '', c.status ?? '', c.isMdm ?? '', c.deptId ?? '');
     const body = { type: tp, state: st, orgCode: oc, appkey: apk, sign: sg };
     if (tp === 0) { body.userIds = uids; } else if (Object.keys(c).length > 0) body.condition = c;
