@@ -5,6 +5,7 @@
   "type": "module",
   "bin": {
     "octobus-tentacles": "bin/octobus-tentacles.js",
+    "360-epp": "bin/360-epp.js",
     "alibaba-cloud-simple-application-server-firewall": "bin/alibaba-cloud-simple-application-server-firewall.js",
     "das-gateway-v3": "bin/das-gateway-v3.js",
     "das-tgfw-v6": "bin/das-tgfw-v6.js",
@@ -53,6 +54,7 @@
     "wd-k01": "bin/wd-k01.js"
   },
   "files": [
+    "bin/360-epp.js",
     "bin/alibaba-cloud-simple-application-server-firewall.js",
     "bin/das-gateway-v3.js",
     "bin/das-tgfw-v6.js",
@@ -99,6 +101,7 @@
     "bin/venus-ads-v3-6.js",
     "bin/wd-k01.js",
     "bin/wangsu-label-ip.js",
+    "360__360-epp_v10-0-0-08331",
     "alibaba-cloud__simple-application-server-firewall",
     "das__gateway_v3",
     "das__tgfw_v6",

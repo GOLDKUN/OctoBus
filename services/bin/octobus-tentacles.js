@@ -5,6 +5,10 @@ import { runServiceMain } from "@chaitin-ai/octobus-sdk";
 import { Command } from "commander";
 
 const services = {
+  "360-epp": {
+    entryFile: "../360__360-epp_v10-0-0-08331/bin/360-epp.js",
+    serviceModule: "../360__360-epp_v10-0-0-08331/src/service.js",
+  },
   "alibaba-cloud-simple-application-server-firewall": {
     entryFile: "../alibaba-cloud__simple-application-server-firewall/bin/alibaba-cloud-simple-application-server-firewall.js",
     serviceModule: "../alibaba-cloud__simple-application-server-firewall/src/service.js",

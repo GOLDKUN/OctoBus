@@ -86,6 +86,8 @@ class EppSession {
     this.skipTlsVerify = false;
     this.username = null;
     this.password = null;
+    this.configuredUsername = '';
+    this.configuredPassword = '';
   }
 
   configure(ctx) {
@@ -93,6 +95,17 @@ class EppSession {
     this.baseUrl = normalizeBaseUrl(
       bindings.endpoint || bindings.baseUrl || bindings.restBaseUrl || ''
     );
+
+    const newUsername = bindings.username || '';
+    const newPassword = bindings.password || '';
+
+    if ((newUsername && this.configuredUsername && newUsername !== this.configuredUsername) ||
+        (newPassword && this.configuredPassword && newPassword !== this.configuredPassword)) {
+      this.cookie = null;
+    }
+    this.configuredUsername = newUsername;
+    this.configuredPassword = newPassword;
+
     this.timeoutMs = ctx.limits?.timeoutMs || bindings.timeoutMs || DEFAULT_TIMEOUT_MS;
     this.skipTlsVerify = Boolean(
       bindings.skipTlsVerify || bindings.tlsInsecureSkipVerify || bindings.skip_tls_verify

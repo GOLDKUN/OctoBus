@@ -5,7 +5,7 @@
 ## 导入 OctoBus
 
 ```bash
-octobus service import --id 360-epp ./services/360__360-epp_v10.0.0.08331
+octobus service import --id 360-epp ./services/360__360-epp_v10-0-0-08331
 ```
 
 ## 包文件说明
@@ -102,7 +102,7 @@ octobus service import --id 360-epp ./services/360__360-epp_v10.0.0.08331
 
 ```bash
 cd services
-npm run validate -- --service-dir 360__360-epp_v10.0.0.08331
-npm test -- --service-dir 360__360-epp_v10.0.0.08331
+npm run validate -- --service-dir 360__360-epp_v10-0-0-08331
+npm test -- --service-dir 360__360-epp_v10-0-0-08331
 npm run pack:check
 ```
