@@ -105,10 +105,11 @@ export function rpcdef(ctx) {
     const oc = first(req?.org_code, req?.orgCode) || ocDef; const apk = first(req?.appkey) || ak;
     const uid = first(req?.user_id, req?.userId) || ''; const un = first(req?.user_name, req?.userName) || '';
     if (!uid) throw er('INVALID_ARGUMENT', 'user_id required'); if (!un) throw er('INVALID_ARGUMENT', 'user_name required');
-    const ln = first(req?.login_name, req?.loginName) || ''; const did = first(req?.dept_id, req?.deptId) || '';
+    const ln = str(first(req?.login_name, req?.loginName)); const did = first(req?.dept_id, req?.deptId) || '';
     if (!did) throw er('INVALID_ARGUMENT', 'dept_id required');
-    const sg = first(req?.sign) || signCalc(sk, apk, oc, uid, un, ln, did);
-    const body = { userId: uid, userName: un, loginName: ln, deptId: did, orgCode: oc, appkey: apk, sign: sg };
+    const sg = first(req?.sign) || signCalc(sk, apk, oc, uid, un, ln ?? '', did);
+    const body = { userId: uid, userName: un, deptId: did, orgCode: oc, appkey: apk, sign: sg };
+    if (ln !== undefined) body.loginName = ln;
     const sm = { phone_number: 'phoneNumber', job: 'job', employee_number: 'employeeNumber', address: 'address', mobile: 'mobile', email: 'email', organization: 'organization' };
     for (const [k, jk] of Object.entries(sm)) { const v = str(first(req?.[k])); if (v !== undefined) body[jk] = v; }
     for (const k of ['is_mdm', 'weight']) { const v = num(first(req?.[k])); if (v !== undefined) body[k === 'is_mdm' ? 'isMdm' : k] = v; }
@@ -130,11 +131,11 @@ export function rpcdef(ctx) {
   const goDelUsers = async (req) => {
     const oc = first(req?.org_code, req?.orgCode) || ocDef; const apk = first(req?.appkey) || ak;
     const tp = Number(first(req?.type) ?? 0); const uids = arr(first(req?.user_ids, req?.userIds));
-    const did = first(req?.condition?.dept_id, req?.condition?.deptId) || '';
+    const c = buildCond(req?.condition);
     if (tp === 0 && uids.length === 0) throw er('INVALID_ARGUMENT', 'user_ids required for type=0');
-    const sg = first(req?.sign) || signCalc(sk, apk, oc, uids.join(','), tp, did);
+    const sg = first(req?.sign) || signCalc(sk, apk, oc, uids.join(','), tp, c.keyWord ?? '', c.status ?? '', c.isMdm ?? '', c.deptId ?? '');
     const body = { type: tp, orgCode: oc, appkey: apk, sign: sg };
-    if (tp === 0) { body.userIds = uids; } else { const c = buildCond(req?.condition); if (Object.keys(c).length > 0) body.condition = c; }
+    if (tp === 0) { body.userIds = uids; } else if (Object.keys(c).length > 0) body.condition = c;
     const j = await post(BASE + '/v1/delUsers', body);
     return { code: j?.code ?? 0, msg: j?.msg ?? '', data: toValue(j?.data ?? null) };
   };
@@ -145,11 +146,11 @@ export function rpcdef(ctx) {
     const tp = Number(first(req?.type) ?? 0); const st = first(req?.state);
     if (st === undefined || st === null) throw er('INVALID_ARGUMENT', 'state required');
     const uids = arr(first(req?.user_ids, req?.userIds));
-    const did = first(req?.condition?.dept_id, req?.condition?.deptId) || '';
+    const c = buildCond(req?.condition);
     if (tp === 0 && uids.length === 0) throw er('INVALID_ARGUMENT', 'user_ids required for type=0');
-    const sg = first(req?.sign) || signCalc(sk, apk, oc, uids.join(','), tp, st, did);
+    const sg = first(req?.sign) || signCalc(sk, apk, oc, uids.join(','), tp, st, c.keyWord ?? '', c.status ?? '', c.isMdm ?? '', c.deptId ?? '');
     const body = { type: tp, state: st, orgCode: oc, appkey: apk, sign: sg };
-    if (tp === 0) { body.userIds = uids; } else { const c = buildCond(req?.condition); if (Object.keys(c).length > 0) body.condition = c; }
+    if (tp === 0) { body.userIds = uids; } else if (Object.keys(c).length > 0) body.condition = c;
     const j = await post(BASE + '/v1/stateUsers', body);
     return { code: j?.code ?? 0, msg: j?.msg ?? '', data: toValue(j?.data ?? null) };
   };

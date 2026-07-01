@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 
 import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
 
@@ -19,6 +20,11 @@ const buildCtx = (req) => ({
   secret: { appkey: 'appkey', secretkey: 'secretkey', orgCode: 'org' },
   req,
 });
+
+const signCalc = (secret, ...params) => crypto
+  .createHash('md5')
+  .update(params.map((param) => (param === undefined || param === null ? '' : String(param))).join('') + secret, 'utf8')
+  .digest('hex');
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -150,6 +156,20 @@ test('UpdUser requires dept_id before calling upstream', async () => {
   assert.equal(called, false);
 });
 
+test('UpdUser omits missing loginName instead of sending empty string', async () => {
+  let captured;
+  globalThis.fetch = async (url, init) => {
+    captured = { url, init };
+    return { ok: true, status: 200, text: async () => '{"code":0,"data":{}}' };
+  };
+
+  await rpcdef(buildCtx({ user_id: 'user-1', user_name: 'User', dept_id: 'dept' }))[UPD_USER]();
+
+  const body = JSON.parse(captured.init.body);
+  assert.equal(Object.hasOwn(body, 'loginName'), false);
+  assert.equal(body.sign, signCalc('secretkey', 'appkey', 'org', 'user-1', 'User', '', 'dept'));
+});
+
 test('UpdUser omits empty numeric fields instead of sending zero values', async () => {
   let captured;
   globalThis.fetch = async (url, init) => {
@@ -249,15 +269,17 @@ test('DelUsers condition mode preserves falsy condition filters', async () => {
     return { ok: true, status: 200, text: async () => '{"code":0,"data":null}' };
   };
 
-  const result = await rpcdef(buildCtx({ type: 1, condition: { key_word: '', status: 0, is_mdm: 0, dept_id: 'dept' } }))[DEL_USERS]();
+  const result = await rpcdef(buildCtx({ type: 1, condition: { key_word: 'kw', status: 0, is_mdm: 0, dept_id: 'dept' } }))[DEL_USERS]();
 
   assert.equal(captured.url, 'https://mbs.example/uusafe/mos/thirdaccess/rest/opt/v1/delUsers');
-  assert.deepEqual(JSON.parse(captured.init.body).condition, {
-    keyWord: '',
+  const body = JSON.parse(captured.init.body);
+  assert.deepEqual(body.condition, {
+    keyWord: 'kw',
     status: 0,
     isMdm: 0,
     deptId: 'dept',
   });
+  assert.equal(body.sign, signCalc('secretkey', 'appkey', 'org', '', 1, 'kw', 0, 0, 'dept'));
   assert.deepEqual(result.data, { nullValue: 'NULL_VALUE' });
 });
 
@@ -268,14 +290,18 @@ test('StateUsers condition mode preserves falsy condition filters', async () => 
     return { ok: true, status: 200, text: async () => '{"code":0,"data":{"updated":2}}' };
   };
 
-  const result = await rpcdef(buildCtx({ type: 1, state: '0', condition: { status: 0, is_mdm: 0 } }))[STATE_USERS]();
+  const result = await rpcdef(buildCtx({ type: 1, state: '0', condition: { key_word: 'kw', status: 0, is_mdm: 0, dept_id: 'dept' } }))[STATE_USERS]();
 
   assert.equal(captured.url, 'https://mbs.example/uusafe/mos/thirdaccess/rest/opt/v1/stateUsers');
-  assert.equal(JSON.parse(captured.init.body).state, '0');
-  assert.deepEqual(JSON.parse(captured.init.body).condition, {
+  const body = JSON.parse(captured.init.body);
+  assert.equal(body.state, '0');
+  assert.deepEqual(body.condition, {
+    keyWord: 'kw',
     status: 0,
     isMdm: 0,
+    deptId: 'dept',
   });
+  assert.equal(body.sign, signCalc('secretkey', 'appkey', 'org', '', 1, '0', 'kw', 0, 0, 'dept'));
   assert.equal(result.data.structValue.fields.updated.numberValue, 2);
 });
 
