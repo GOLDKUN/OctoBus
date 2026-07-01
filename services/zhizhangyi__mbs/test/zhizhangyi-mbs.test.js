@@ -7,8 +7,13 @@ import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
 import { rpcdef } from '../src/zhizhangyi-mbs.js';
 
 const ADD_USER = 'zhizhangyi.mbs.UserManagement/AddUser';
+const CHECK_LOGIN_NAME = 'zhizhangyi.mbs.UserManagement/CheckLoginName';
 const DEL_USERS = 'zhizhangyi.mbs.UserManagement/DelUsers';
+const DETAIL_USER = 'zhizhangyi.mbs.UserManagement/DetailUser';
+const FORCE_OFFLINE = 'zhizhangyi.mbs.UserManagement/ForceOffline';
+const GET_USER_BY_PHONE = 'zhizhangyi.mbs.UserManagement/GetUserByPhone';
 const GET_USERS = 'zhizhangyi.mbs.UserManagement/GetUsers';
+const IMPORT_USER = 'zhizhangyi.mbs.UserManagement/ImportUser';
 const STATE_USERS = 'zhizhangyi.mbs.UserManagement/StateUsers';
 const UPD_USER = 'zhizhangyi.mbs.UserManagement/UpdUser';
 const UPD_USER_PWD = 'zhizhangyi.mbs.UserManagement/UpdUserPwd';
@@ -471,4 +476,198 @@ test('StateUsers treats string type zero as userIds mode', async () => {
   assert.equal(JSON.parse(captured.init.body).type, 0);
   assert.equal(JSON.parse(captured.init.body).state, '1');
   assert.equal(Object.hasOwn(JSON.parse(captured.init.body), 'condition'), false);
+});
+
+test('DetailUser requires user_id before calling upstream', async () => {
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return { ok: true, status: 200, text: async () => '{"code":0}' };
+  };
+
+  await assert.rejects(
+    () => rpcdef(buildCtx({}))[DETAIL_USER](),
+    (err) => {
+      assert.ok(err instanceof GrpcError);
+      assert.equal(err.code, grpcStatus.INVALID_ARGUMENT);
+      assert.match(err.message, /user_id required/);
+      return true;
+    },
+  );
+
+  assert.equal(called, false);
+});
+
+test('DetailUser maps detail response and returns null data when upstream data is empty', async () => {
+  const responses = [
+    { code: 0, data: { userId: 'user-1', userName: 'User', loginName: 'login', deptId: 'dept', deptName: 'Dept', phoneNumber: '13800000000', job: 'dev', employeeNumber: 'E001', address: 'addr', mobile: '13900000000', email: 'u@example.com', organization: 'org-name', isMdm: 0, state: 1, weight: 2, iconFileId: 'icon', attrs: [{ attrKey: 'role', attrValue: 'admin' }] } },
+    { code: 0, data: null },
+  ];
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, text: async () => JSON.stringify(responses.shift()) };
+  };
+
+  const detail = await rpcdef(buildCtx({ user_id: 'user-1' }))[DETAIL_USER]();
+  const empty = await rpcdef(buildCtx({ user_id: 'user-2' }))[DETAIL_USER]();
+
+  assert.equal(calls[0].url, 'https://mbs.example/uusafe/mos/thirdaccess/rest/opt/v1/detailUser');
+  assert.equal(JSON.parse(calls[0].init.body).userId, 'user-1');
+  assert.equal(JSON.parse(calls[0].init.body).sign, signCalc('secretkey', 'appkey', 'org', 'user-1'));
+  assert.deepEqual(detail.data, {
+    user_id: 'user-1',
+    user_name: 'User',
+    login_name: 'login',
+    dept_id: 'dept',
+    dept_name: 'Dept',
+    phone_number: '13800000000',
+    job: 'dev',
+    employee_number: 'E001',
+    address: 'addr',
+    mobile: '13900000000',
+    email: 'u@example.com',
+    organization: 'org-name',
+    is_mdm: 0,
+    state: 1,
+    weight: 2,
+    icon_file_id: 'icon',
+    attrs: [{ attr_key: 'role', attr_value: 'admin' }],
+  });
+  assert.equal(empty.data, null);
+});
+
+test('CheckLoginName requires login_name before calling upstream and signs request', async () => {
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return { ok: true, status: 200, text: async () => '{"code":0}' };
+  };
+
+  await assert.rejects(
+    () => rpcdef(buildCtx({}))[CHECK_LOGIN_NAME](),
+    (err) => {
+      assert.ok(err instanceof GrpcError);
+      assert.equal(err.code, grpcStatus.INVALID_ARGUMENT);
+      assert.match(err.message, /login_name required/);
+      return true;
+    },
+  );
+  assert.equal(called, false);
+
+  let captured;
+  globalThis.fetch = async (url, init) => {
+    captured = { url, init };
+    return { ok: true, status: 200, text: async () => '{"code":0,"data":{"available":true}}' };
+  };
+
+  const result = await rpcdef(buildCtx({ login_name: 'user' }))[CHECK_LOGIN_NAME]();
+  const body = JSON.parse(captured.init.body);
+  assert.equal(captured.url, 'https://mbs.example/uusafe/mos/thirdaccess/rest/opt/v1/checkLoginName');
+  assert.equal(body.loginName, 'user');
+  assert.equal(body.sign, signCalc('secretkey', 'appkey', 'org', 'user'));
+  assert.equal(result.data.structValue.fields.available.boolValue, true);
+});
+
+test('GetUserByPhone requires phone and maps array or null data', async () => {
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return { ok: true, status: 200, text: async () => '{"code":0}' };
+  };
+
+  await assert.rejects(
+    () => rpcdef(buildCtx({}))[GET_USER_BY_PHONE](),
+    (err) => {
+      assert.ok(err instanceof GrpcError);
+      assert.equal(err.code, grpcStatus.INVALID_ARGUMENT);
+      assert.match(err.message, /phone required/);
+      return true;
+    },
+  );
+  assert.equal(called, false);
+
+  const responses = [
+    { code: 0, data: [{ userId: 'user-1', userName: 'User', loginName: 'login', phoneNumber: '13800000000', email: 'u@example.com' }] },
+    { code: 0, data: null },
+  ];
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, text: async () => JSON.stringify(responses.shift()) };
+  };
+
+  const result = await rpcdef(buildCtx({ phone: '13800000000' }))[GET_USER_BY_PHONE]();
+  const empty = await rpcdef(buildCtx({ phone: '13900000000' }))[GET_USER_BY_PHONE]();
+  const body = JSON.parse(calls[0].init.body);
+  assert.equal(calls[0].url, 'https://mbs.example/uusafe/mos/thirdaccess/rest/opt/v1/getUserByPhone');
+  assert.equal(body.phone, '13800000000');
+  assert.equal(body.sign, signCalc('secretkey', 'appkey', 'org', '13800000000'));
+  assert.deepEqual(result.data, [{ user_id: 'user-1', user_name: 'User', login_name: 'login', phone_number: '13800000000', email: 'u@example.com' }]);
+  assert.deepEqual(empty.data, []);
+});
+
+test('ForceOffline requires user_id before calling upstream and signs request', async () => {
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return { ok: true, status: 200, text: async () => '{"code":0}' };
+  };
+
+  await assert.rejects(
+    () => rpcdef(buildCtx({}))[FORCE_OFFLINE](),
+    (err) => {
+      assert.ok(err instanceof GrpcError);
+      assert.equal(err.code, grpcStatus.INVALID_ARGUMENT);
+      assert.match(err.message, /user_id required/);
+      return true;
+    },
+  );
+  assert.equal(called, false);
+
+  let captured;
+  globalThis.fetch = async (url, init) => {
+    captured = { url, init };
+    return { ok: true, status: 200, text: async () => '{"code":0,"data":{"offline":true}}' };
+  };
+
+  const result = await rpcdef(buildCtx({ user_id: 'user-1' }))[FORCE_OFFLINE]();
+  const body = JSON.parse(captured.init.body);
+  assert.equal(captured.url, 'https://mbs.example/uusafe/mos/thirdaccess/rest/opt/v1/forceOffline');
+  assert.equal(body.userId, 'user-1');
+  assert.equal(body.sign, signCalc('secretkey', 'appkey', 'org', 'user-1'));
+  assert.equal(result.data.structValue.fields.offline.boolValue, true);
+});
+
+test('ImportUser requires file_id and posts default lang with signature', async () => {
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return { ok: true, status: 200, text: async () => '{"code":0}' };
+  };
+
+  await assert.rejects(
+    () => rpcdef(buildCtx({}))[IMPORT_USER](),
+    (err) => {
+      assert.ok(err instanceof GrpcError);
+      assert.equal(err.code, grpcStatus.INVALID_ARGUMENT);
+      assert.match(err.message, /file_id required/);
+      return true;
+    },
+  );
+  assert.equal(called, false);
+
+  let captured;
+  globalThis.fetch = async (url, init) => {
+    captured = { url, init };
+    return { ok: true, status: 200, text: async () => '{"code":0,"data":{"imported":3}}' };
+  };
+
+  const result = await rpcdef(buildCtx({ file_id: 'file-1' }))[IMPORT_USER]();
+  const body = JSON.parse(captured.init.body);
+  assert.equal(captured.url, 'https://mbs.example/uusafe/mos/thirdaccess/rest/opt/v1/importUser');
+  assert.equal(body.lang, 0);
+  assert.equal(body.fileId, 'file-1');
+  assert.equal(body.sign, signCalc('secretkey', 'appkey', 'org', 0, 'file-1'));
+  assert.equal(result.data.structValue.fields.imported.numberValue, 3);
 });
