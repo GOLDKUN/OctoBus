@@ -1,6 +1,7 @@
 // MBS User Management API Proxy - Part 1: helpers + first 6 handlers
 import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
 import crypto from 'node:crypto';
+import { Agent } from 'undici';
 
 const DEF_TO = 30000;
 const BASE = '/uusafe/mos/thirdaccess/rest/opt';
@@ -16,7 +17,11 @@ const str = (v) => (v === undefined || v === null || v === '') ? undefined : Str
 const num = (v) => (v === undefined || v === null || v === '') ? undefined : Number(v);
 const gc = (c) => ({ INVALID_ARGUMENT: grpcStatus.INVALID_ARGUMENT, FAILED_PRECONDITION: grpcStatus.FAILED_PRECONDITION, PERMISSION_DENIED: grpcStatus.PERMISSION_DENIED, UNAVAILABLE: grpcStatus.UNAVAILABLE, DEADLINE_EXCEEDED: grpcStatus.DEADLINE_EXCEEDED })[c] ?? grpcStatus.UNKNOWN;
 const er = (c, m) => { const e = new GrpcError(gc(c), c + ': ' + m); e.legacyCode = c; return e; };
-const doFetch = async (url, init, to, st) => { const tls = st ? { insecureSkipVerify: true, tlsInsecureSkipVerify: true } : {}; try { return await fetch(url, { ...init, timeoutMs: to, ...tls }); } catch (e) { throw er('UNAVAILABLE', e?.cause?.message || e?.message || 'fetch failed'); } };
+const doFetch = async (url, init, to, st) => {
+  const dispatcher = st ? new Agent({ connect: { rejectUnauthorized: false } }) : undefined;
+  const signal = to ? AbortSignal.timeout(Number(to)) : undefined;
+  try { return await fetch(url, { ...init, ...(dispatcher && { dispatcher }), ...(signal && { signal }) }); } catch (e) { throw er('UNAVAILABLE', e?.cause?.message || e?.message || 'fetch failed'); }
+};
 const rdJson = async (res) => { const t = await res.text(); if (!res.ok) { const safe = t.length > 200 ? t.slice(0, 200) + '...' : t; throw er(res.status === 401 || res.status === 403 ? 'PERMISSION_DENIED' : res.status >= 400 && res.status < 500 ? 'FAILED_PRECONDITION' : 'UNAVAILABLE', 'http ' + res.status + ': ' + safe); } if (!t.trim()) return {}; try { return JSON.parse(t); } catch { throw er('UNKNOWN', 'not JSON'); } };
 const check = (j) => { if (j.code !== undefined && j.code !== 0) throw er('FAILED_PRECONDITION', 'MBS code=' + j.code + ': ' + (j.msg || '')); };
 const buildCond = (cond) => { const c = {}; const kw = first(cond?.key_word, cond?.keyWord); if (kw !== undefined) c.keyWord = kw; if (cond?.status !== undefined && cond?.status !== null) c.status = cond.status; const im = first(cond?.is_mdm, cond?.isMdm); if (im !== undefined) c.isMdm = im; const did = first(cond?.dept_id, cond?.deptId); if (did !== undefined) c.deptId = did; return c; };
@@ -131,6 +136,7 @@ export function rpcdef(ctx) {
   const goDelUsers = async (req) => {
     const oc = first(req?.org_code, req?.orgCode) || ocDef; const apk = first(req?.appkey) || ak;
     const tp = Number(first(req?.type) ?? 0); const uids = arr(first(req?.user_ids, req?.userIds));
+    if (tp !== 0 && tp !== 1) throw er('INVALID_ARGUMENT', 'type must be 0 or 1');
     const c = buildCond(req?.condition);
     if (tp === 0 && uids.length === 0) throw er('INVALID_ARGUMENT', 'user_ids required for type=0');
     if (tp === 1 && Object.keys(c).length === 0) throw er('INVALID_ARGUMENT', 'condition required for type=1');
@@ -148,6 +154,7 @@ export function rpcdef(ctx) {
   const goStateUsers = async (req) => {
     const oc = first(req?.org_code, req?.orgCode) || ocDef; const apk = first(req?.appkey) || ak;
     const tp = Number(first(req?.type) ?? 0); const st = first(req?.state);
+    if (tp !== 0 && tp !== 1) throw er('INVALID_ARGUMENT', 'type must be 0 or 1');
     if (st === undefined || st === null) throw er('INVALID_ARGUMENT', 'state required');
     const uids = arr(first(req?.user_ids, req?.userIds));
     const c = buildCond(req?.condition);

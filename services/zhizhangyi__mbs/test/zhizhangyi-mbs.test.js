@@ -74,6 +74,29 @@ test('GetUsers preserves falsy state and is_mdm filters', async () => {
   });
 });
 
+test('fetch uses AbortSignal and undici dispatcher for timeout and TLS skip', async () => {
+  let captured;
+  globalThis.fetch = async (url, init) => {
+    captured = { url, init };
+    return { ok: true, status: 200, text: async () => '{"code":0,"data":{"total":0,"userInfos":[]}}' };
+  };
+
+  await rpcdef({
+    config: { endpoint: 'https://mbs.example', skipTlsVerify: true },
+    secret: { appkey: 'appkey', secretkey: 'secretkey', orgCode: 'org' },
+    limits: { timeoutMs: 1234 },
+    req: { condition: { dept_id: '1' } },
+  })[GET_USERS]();
+
+  assert.equal(captured.url, 'https://mbs.example/uusafe/mos/thirdaccess/rest/opt/v1/getUsers');
+  assert.ok(captured.init.signal instanceof AbortSignal);
+  assert.equal(captured.init.signal.aborted, false);
+  assert.ok(captured.init.dispatcher);
+  assert.equal(Object.hasOwn(captured.init, 'timeoutMs'), false);
+  assert.equal(Object.hasOwn(captured.init, 'insecureSkipVerify'), false);
+  assert.equal(Object.hasOwn(captured.init, 'tlsInsecureSkipVerify'), false);
+});
+
 test('GetUsers requires dept_id before calling upstream', async () => {
   let called = false;
   globalThis.fetch = async () => {
@@ -269,6 +292,27 @@ test('DelUsers treats string type zero as userIds mode', async () => {
   assert.equal(Object.hasOwn(body, 'condition'), false);
 });
 
+test('DelUsers rejects invalid type before calling upstream', async () => {
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return { ok: true, status: 200, text: async () => '{"code":0}' };
+  };
+
+  await assert.rejects(
+    () => rpcdef(buildCtx({ type: 2, user_ids: ['user-1'] }))[DEL_USERS](),
+    (err) => {
+      assert.ok(err instanceof GrpcError);
+      assert.equal(err.code, grpcStatus.INVALID_ARGUMENT);
+      assert.equal(err.legacyCode, 'INVALID_ARGUMENT');
+      assert.match(err.message, /type must be 0 or 1/);
+      return true;
+    },
+  );
+
+  assert.equal(called, false);
+});
+
 test('DelUsers requires condition for type one before calling upstream', async () => {
   let called = false;
   globalThis.fetch = async () => {
@@ -283,6 +327,27 @@ test('DelUsers requires condition for type one before calling upstream', async (
       assert.equal(err.code, grpcStatus.INVALID_ARGUMENT);
       assert.equal(err.legacyCode, 'INVALID_ARGUMENT');
       assert.match(err.message, /condition required for type=1/);
+      return true;
+    },
+  );
+
+  assert.equal(called, false);
+});
+
+test('StateUsers rejects invalid type before calling upstream', async () => {
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return { ok: true, status: 200, text: async () => '{"code":0}' };
+  };
+
+  await assert.rejects(
+    () => rpcdef(buildCtx({ type: 'bad', state: 1, user_ids: ['user-1'] }))[STATE_USERS](),
+    (err) => {
+      assert.ok(err instanceof GrpcError);
+      assert.equal(err.code, grpcStatus.INVALID_ARGUMENT);
+      assert.equal(err.legacyCode, 'INVALID_ARGUMENT');
+      assert.match(err.message, /type must be 0 or 1/);
       return true;
     },
   );
