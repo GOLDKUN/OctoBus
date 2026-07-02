@@ -98,7 +98,7 @@ gRPC 必须原样暴露原始接口，因此 method path 保持：
 /{package.Service}/{Method}
 ```
 
-由于业务 request message 不能增加路由字段，capset / service / instance 不能编码到 protobuf body 中。instance ID 全局唯一，并且 instance 已经关联 service，因此 gRPC 路由不需要在 metadata 中重复携带 service ID。
+由于业务 request message 不能增加路由字段，capset / instance 不能编码到 protobuf body 中。instance ID 全局唯一，并且 instance 已经关联 service，因此 gRPC 路由只需要携带 instance ID。
 
 已确认：gRPC 路由信息使用 metadata。
 
@@ -108,9 +108,6 @@ gRPC 必须原样暴露原始接口，因此 method path 保持：
 x-octobus-capset: dev
 x-octobus-instance: gitlab-test
 ```
-
-`x-octobus-service` 已废弃并会被忽略，不能参与 gRPC 路由或校验。
-即使调用方发送了该 metadata，gateway 也必须只按 `x-octobus-capset + x-octobus-instance + method path` 查找暴露方法。
 
 `grpcurl` 调用示例：
 
@@ -125,9 +122,9 @@ grpcurl \
   gitlab.MergeRequestService/List
 ```
 
-Go gateway 使用上述 metadata 做确定性路由。gRPC catalog 中的 routing metadata 只输出 `x-octobus-capset` 和 `x-octobus-instance`，不输出已废弃的 `x-octobus-service`。
+Go gateway 使用上述 metadata 做确定性路由。gRPC catalog 中的 routing metadata 输出 `x-octobus-capset` 和 `x-octobus-instance`。
 
-gateway 在转发给 Node instance 前剥离 Octobus 控制 metadata。控制 metadata 包括 `x-octobus-*` 中除 `x-octobus-ext-*` 以外的字段，也包括已废弃但可能由旧客户端发送的 `x-octobus-service`。需要透传给 service package 的 Octobus 业务扩展字段使用 `x-octobus-ext-*`，例如 `x-octobus-ext-business-request-id` 和 `x-octobus-ext-username`，不会被剥离。calculator 示例优先读取 `x-octobus-ext-business-request-id`，并 fallback 到旧的 `x-business-request-id`。
+gateway 在转发给 Node instance 前剥离 Octobus 控制 metadata。控制 metadata 包括 `x-octobus-*` 中除 `x-octobus-ext-*` 以外的字段。需要透传给 service package 的 Octobus 业务扩展字段使用 `x-octobus-ext-*`，例如 `x-octobus-ext-business-request-id` 和 `x-octobus-ext-username`，不会被剥离。calculator 示例优先读取 `x-octobus-ext-business-request-id`，并 fallback 到旧的 `x-business-request-id`。
 
 Connect RPC 普通 JSON 调用只从 HTTP header 透传明确允许的业务 metadata：`x-business-request-id` 和 `x-octobus-ext-*`。不全量透传 HTTP header，避免 hop-by-hop header、content negotiation header、`Host`、`Authorization` 或 Octobus 控制 header 泄漏到 service package；`Authorization` 只用于 capset 鉴权。
 

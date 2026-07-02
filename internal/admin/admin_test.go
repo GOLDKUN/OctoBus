@@ -1,11 +1,13 @@
 package admin
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -337,6 +339,109 @@ func TestAdminRecursiveServiceImportValidation(t *testing.T) {
 				t.Fatalf("body=%s want %q", body, tc.want)
 			}
 		})
+	}
+}
+
+func TestAdminStreamingServiceImportFlushesProgressBeforeComplete(t *testing.T) {
+	dataDir := t.TempDir()
+	st, err := store.Open(filepath.Join(dataDir, "octobus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	release := make(chan struct{})
+	srv := &Server{
+		Store: st,
+		Importer: fakeServiceImporter{importFn: func(ctx context.Context, opts packageimport.Options) (packageimport.Result, error) {
+			if opts.Progress == nil {
+				t.Fatal("streaming import missing progress callback")
+			}
+			if err := opts.Progress(packageimport.ImportProgressEvent{Type: "status", Stage: "prepare_source", Message: "Preparing service package", ServiceID: opts.ServiceID}); err != nil {
+				return packageimport.Result{}, err
+			}
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return packageimport.Result{}, ctx.Err()
+			}
+			return packageimport.Result{Service: domain.Service{ID: opts.ServiceID, Name: "Echo", RuntimeMode: domain.RuntimeModeOnDemand}}, nil
+		}},
+	}
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+
+	req, err := http.NewRequest(http.MethodPost, httpSrv.URL+"/admin/v1/services/import", bytes.NewBufferString(`{"service_id":"echo","source":"fixture"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "application/x-ndjson")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/x-ndjson") {
+		t.Fatalf("unexpected streaming response status=%d content-type=%q", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	reader := bufio.NewReader(resp.Body)
+	first, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(first, `"type":"status"`) || !strings.Contains(first, `"prepare_source"`) {
+		t.Fatalf("first event=%s", first)
+	}
+	close(release)
+	rest, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rest), `"type":"complete"`) || !strings.Contains(string(rest), `"status":"ok"`) {
+		t.Fatalf("remaining events=%s", rest)
+	}
+}
+
+func TestAdminStreamingServiceImportClientCancelPropagatesToImporter(t *testing.T) {
+	dataDir := t.TempDir()
+	st, err := store.Open(filepath.Join(dataDir, "octobus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctxCanceled := make(chan struct{})
+	srv := &Server{
+		Store:      st,
+		Supervisor: supervisor.New(dataDir, st),
+		Importer: fakeServiceImporter{importFn: func(ctx context.Context, opts packageimport.Options) (packageimport.Result, error) {
+			if err := opts.Progress(packageimport.ImportProgressEvent{Type: "status", Stage: "prepare_source", Message: "Preparing service package", ServiceID: opts.ServiceID}); err != nil {
+				return packageimport.Result{}, err
+			}
+			<-ctx.Done()
+			close(ctxCanceled)
+			return packageimport.Result{}, ctx.Err()
+		}},
+	}
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+
+	req, err := http.NewRequest(http.MethodPost, httpSrv.URL+"/admin/v1/services/import", bytes.NewBufferString(`{"service_id":"echo","source":"fixture"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "application/x-ndjson")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(resp.Body)
+	if _, err := reader.ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	select {
+	case <-ctxCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("importer context was not canceled after client disconnect")
 	}
 }
 

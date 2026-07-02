@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,13 +30,14 @@ type Importer struct {
 }
 
 type Options struct {
-	ServiceID string `json:"service_id"`
-	Name      string `json:"name"`
-	Source    string `json:"source"`
-	Offline   bool   `json:"offline"`
-	Reinstall bool   `json:"reinstall"`
-	Build     string `json:"build"`
-	Recursive bool   `json:"recursive"`
+	ServiceID string                          `json:"service_id"`
+	Name      string                          `json:"name"`
+	Source    string                          `json:"source"`
+	Offline   bool                            `json:"offline"`
+	Reinstall bool                            `json:"reinstall"`
+	Build     string                          `json:"build"`
+	Recursive bool                            `json:"recursive"`
+	Progress  func(ImportProgressEvent) error `json:"-"`
 }
 
 type Result struct {
@@ -48,6 +51,21 @@ type RecursiveResult struct {
 	Manifests          map[string]domain.ServiceManifest
 	RestartedInstances map[string][]string
 	RestartErrors      map[string][]string
+}
+
+type ImportProgressEvent struct {
+	Type               string           `json:"type"`
+	Stage              string           `json:"stage,omitempty"`
+	Message            string           `json:"message,omitempty"`
+	ServiceID          string           `json:"service_id,omitempty"`
+	Current            int              `json:"current,omitempty"`
+	Total              int              `json:"total,omitempty"`
+	Service            *domain.Service  `json:"service,omitempty"`
+	Services           []domain.Service `json:"services,omitempty"`
+	RestartedInstances any              `json:"restarted_instances,omitempty"`
+	RestartErrors      any              `json:"restart_errors,omitempty"`
+	Status             string           `json:"status,omitempty"`
+	Error              string           `json:"error,omitempty"`
 }
 
 type preparedSource struct {
@@ -109,6 +127,9 @@ func (i *Importer) Import(ctx context.Context, opts Options) (Result, error) {
 	}
 	defer os.RemoveAll(staging)
 
+	if err := reportImportProgress(opts, ImportProgressEvent{Type: "status", Stage: "prepare_source", Message: "Preparing service package", ServiceID: opts.ServiceID}); err != nil {
+		return Result{}, err
+	}
 	prepared, err := i.prepareSource(ctx, opts, staging)
 	if err != nil {
 		return Result{}, err
@@ -117,15 +138,27 @@ func (i *Importer) Import(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if err := reportImportProgress(opts, ImportProgressEvent{Type: "status", Stage: "build_package", Message: "Building service package", ServiceID: opts.ServiceID}); err != nil {
+		return Result{}, err
+	}
 	if prepared, err = buildSourcePackage(ctx, prepared, staging, policy, opts.Offline); err != nil {
+		return Result{}, err
+	}
+	if err := reportImportProgress(opts, ImportProgressEvent{Type: "status", Stage: "validate_manifest", Message: "Validating service manifest", ServiceID: opts.ServiceID}); err != nil {
 		return Result{}, err
 	}
 	service, err := validatePreparedService(prepared)
 	if err != nil {
 		return Result{}, err
 	}
+	if err := reportImportProgress(opts, ImportProgressEvent{Type: "status", Stage: "prepare_runtime", Message: "Installing runtime dependencies", ServiceID: opts.ServiceID}); err != nil {
+		return Result{}, err
+	}
 	runtimeDir, err := prepareServiceRuntime(ctx, prepared, staging, opts)
 	if err != nil {
+		return Result{}, err
+	}
+	if err := reportImportProgress(opts, ImportProgressEvent{Type: "status", Stage: "compile_descriptor", Message: "Compiling service descriptor", ServiceID: opts.ServiceID}); err != nil {
 		return Result{}, err
 	}
 	descriptor, err := compileServiceDescriptor(staging, service)
@@ -140,11 +173,21 @@ func (i *Importer) Import(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if err := reportImportProgress(opts, ImportProgressEvent{Type: "status", Stage: "commit_service", Message: "Committing service", ServiceID: opts.ServiceID}); err != nil {
+		return Result{}, err
+	}
 	stored, err := i.commitImportedService(ctx, svc, serviceDir, commitDir)
 	if err != nil {
 		return Result{}, err
 	}
 	return Result{Service: stored, Manifest: service.Manifest}, nil
+}
+
+func reportImportProgress(opts Options, event ImportProgressEvent) error {
+	if opts.Progress == nil {
+		return nil
+	}
+	return opts.Progress(event)
 }
 
 func validatePreparedService(prepared preparedSource) (preparedService, error) {
@@ -324,6 +367,9 @@ func (i *Importer) ImportRecursive(ctx context.Context, opts Options) (Recursive
 	}
 	defer os.RemoveAll(staging)
 
+	if err := reportImportProgress(opts, ImportProgressEvent{Type: "status", Stage: "prepare_source", Message: "Preparing service package"}); err != nil {
+		return RecursiveResult{}, err
+	}
 	prepared, err := i.prepareSource(ctx, opts, staging)
 	if err != nil {
 		return RecursiveResult{}, err
@@ -332,10 +378,16 @@ func (i *Importer) ImportRecursive(ctx context.Context, opts Options) (Recursive
 	if err != nil {
 		return RecursiveResult{}, err
 	}
+	if err := reportImportProgress(opts, ImportProgressEvent{Type: "status", Stage: "build_package", Message: "Building service package"}); err != nil {
+		return RecursiveResult{}, err
+	}
 	if prepared, err = buildSourcePackage(ctx, prepared, staging, policy, opts.Offline); err != nil {
 		return RecursiveResult{}, err
 	}
 	basePackageSource := recursiveBasePackageSource(opts.Source, baseSource)
+	if err := reportImportProgress(opts, ImportProgressEvent{Type: "status", Stage: "prepare_runtime", Message: "Installing runtime dependencies"}); err != nil {
+		return RecursiveResult{}, err
+	}
 	runtimeDir, err := prepareServiceRuntime(ctx, prepared, staging, opts)
 	if err != nil {
 		return RecursiveResult{}, err
@@ -349,9 +401,13 @@ func (i *Importer) ImportRecursive(ctx context.Context, opts Options) (Recursive
 	seen := make(map[string]string, len(serviceRoots))
 	descriptorDir := filepath.Join(staging, "descriptors")
 	for idx, serviceRoot := range serviceRoots {
+		current := idx + 1
 		servicePrepared := prepared
 		servicePrepared.ServiceRoot = serviceRoot
 		servicePrepared.PackageSource = sourceWithServiceRootForPackage(basePackageSource, serviceRoot)
+		if err := reportImportProgress(opts, ImportProgressEvent{Type: "status", Stage: "validate_manifest", Message: "Validating service manifest", Current: current, Total: len(serviceRoots)}); err != nil {
+			return RecursiveResult{}, err
+		}
 		service, err := validatePreparedService(servicePrepared)
 		if err != nil {
 			return RecursiveResult{}, fmt.Errorf("validate service %s: %w", serviceRoot, err)
@@ -368,6 +424,9 @@ func (i *Importer) ImportRecursive(ctx context.Context, opts Options) (Recursive
 			return RecursiveResult{}, fmt.Errorf("validate service %s schemas: %w", serviceRoot, err)
 		}
 		descriptorPath := filepath.Join(descriptorDir, fmt.Sprintf("%03d-%s.protoset", idx, serviceID))
+		if err := reportImportProgress(opts, ImportProgressEvent{Type: "status", Stage: "compile_descriptor", Message: "Compiling service descriptor", ServiceID: serviceID, Current: current, Total: len(serviceRoots)}); err != nil {
+			return RecursiveResult{}, err
+		}
 		descriptor, err := compileServiceDescriptorAt(descriptorPath, service)
 		if err != nil {
 			return RecursiveResult{}, fmt.Errorf("compile service %s descriptor: %w", serviceRoot, err)
@@ -388,7 +447,8 @@ func (i *Importer) ImportRecursive(ctx context.Context, opts Options) (Recursive
 		RestartedInstances: map[string][]string{},
 		RestartErrors:      map[string][]string{},
 	}
-	for _, candidate := range candidates {
+	for idx, candidate := range candidates {
+		current := idx + 1
 		serviceDir := filepath.Join(i.DataDir, "artifacts", "services", candidate.ServiceID)
 		commitDir, finalPackageDir, err := stageServiceCommit(candidate.Prepared, runtimeDir, candidate.Descriptor, staging)
 		if err != nil {
@@ -399,6 +459,9 @@ func (i *Importer) ImportRecursive(ctx context.Context, opts Options) (Recursive
 		svc, err := i.buildImportedService(ctx, serviceOpts, candidate.Prepared, candidate.Service, candidate.Descriptor.Result, serviceDir, finalPackageDir)
 		if err != nil {
 			return result, fmt.Errorf("build service %s: %w", candidate.ServiceID, err)
+		}
+		if err := reportImportProgress(opts, ImportProgressEvent{Type: "status", Stage: "commit_service", Message: "Committing service", ServiceID: candidate.ServiceID, Current: current, Total: len(candidates)}); err != nil {
+			return result, err
 		}
 		stored, err := i.commitImportedService(ctx, svc, serviceDir, commitDir)
 		if err != nil {
@@ -526,6 +589,8 @@ func (i *Importer) prepareSource(ctx context.Context, opts Options, staging stri
 		prepared.PackageSource = sourceWithServiceRoot(prepared.PackageSource, serviceRoot)
 		prepared.ServiceRoot = serviceRoot
 		return prepared, nil
+	case sourceRemoteArchive:
+		return prepareRemoteArchiveSource(ctx, source, serviceRoot, staging)
 	case sourceHTTPSGit:
 		return i.prepareGitSource(ctx, opts.Source, staging)
 	case sourceUnsupportedGit:
@@ -575,6 +640,94 @@ func (i *Importer) prepareSource(ctx context.Context, opts Options, staging stri
 		return preparedSource{}, err
 	}
 	return preparedSource{ArtifactPath: artifactPath, PackageDir: packageDir, PackageSHA256: domain.HashBytes(b), PackageSource: sourceWithServiceRoot(source, serviceRoot), ServiceRoot: serviceRoot, BuildAllowed: info.IsDir()}, nil
+}
+
+func prepareRemoteArchiveSource(ctx context.Context, source, serviceRoot, staging string) (preparedSource, error) {
+	artifactName, err := remoteArchiveArtifactName(source)
+	if err != nil {
+		return preparedSource{}, err
+	}
+	artifactPath := filepath.Join(staging, artifactName)
+	if err := downloadRemoteArchive(ctx, source, artifactPath); err != nil {
+		return preparedSource{}, err
+	}
+	packageDir := filepath.Join(staging, "package")
+	if strings.HasSuffix(artifactName, ".zip") {
+		err = unzip(artifactPath, packageDir)
+	} else {
+		err = untarGz(artifactPath, packageDir)
+	}
+	if err != nil {
+		return preparedSource{}, err
+	}
+	packageDir = normalizePackageDir(packageDir)
+	b, err := os.ReadFile(artifactPath)
+	if err != nil {
+		return preparedSource{}, err
+	}
+	return preparedSource{
+		ArtifactPath:  artifactPath,
+		PackageDir:    packageDir,
+		PackageSHA256: domain.HashBytes(b),
+		PackageSource: sourceWithServiceRoot(redactedRemoteArchiveSource(source), serviceRoot),
+		ServiceRoot:   serviceRoot,
+		BuildAllowed:  false,
+	}, nil
+}
+
+func remoteArchiveArtifactName(source string) (string, error) {
+	u, err := url.Parse(source)
+	if err != nil {
+		return "", fmt.Errorf("invalid remote package source %q: %w", redactedRemoteArchiveSource(source), err)
+	}
+	path := strings.ToLower(u.Path)
+	if strings.HasSuffix(path, ".zip") {
+		return "package.zip", nil
+	}
+	if strings.HasSuffix(path, ".tgz") || strings.HasSuffix(path, ".tar.gz") {
+		return "package.tgz", nil
+	}
+	return "", fmt.Errorf("unsupported remote package source %q: must end with .tgz, .tar.gz, or .zip", redactedRemoteArchiveSource(source))
+}
+
+func downloadRemoteArchive(ctx context.Context, source, artifactPath string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
+	if err != nil {
+		return fmt.Errorf("download remote package %q: %w", redactedRemoteArchiveSource(source), err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("download remote package %q: %w", redactedRemoteArchiveSource(source), err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("download remote package %q: HTTP %d", redactedRemoteArchiveSource(source), resp.StatusCode)
+	}
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(artifactPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, resp.Body)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
+func redactedRemoteArchiveSource(source string) string {
+	u, err := url.Parse(source)
+	if err != nil {
+		return "<invalid remote package source>"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	return u.String()
 }
 
 func splitSourceServiceRoot(raw string) (string, string, error) {

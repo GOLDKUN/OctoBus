@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"octobus/internal/version"
 )
@@ -195,13 +197,24 @@ func TestServiceImportRequest(t *testing.T) {
 		if req["service_id"] != "echo" || req["source"] != gitSource || req["offline"] != true {
 			t.Fatalf("unexpected body: %+v", req)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": "echo"})
+		if r.Header.Get("Accept") != "application/x-ndjson" {
+			t.Fatalf("Accept=%q", r.Header.Get("Accept"))
+		}
+		_, _ = fmt.Fprintln(w, `{"type":"complete","status":"ok","service":{"ID":"echo"},"restarted_instances":[],"restart_errors":[]}`)
 	}))
 	defer server.Close()
 	var out bytes.Buffer
-	c := &CLI{AdminAddr: strings.TrimPrefix(server.URL, "http://"), Client: server.Client(), Stdout: &out}
+	client := server.Client()
+	client.Timeout = time.Minute
+	c := &CLI{AdminAddr: strings.TrimPrefix(server.URL, "http://"), Client: client, Stdout: &out}
 	if err := c.Run([]string{"service", "import", "echo", "--offline", gitSource}); err != nil {
 		t.Fatal(err)
+	}
+	if c.Client.Timeout != time.Minute {
+		t.Fatalf("client timeout mutated to %v", c.Client.Timeout)
+	}
+	if !strings.Contains(out.String(), `"ID": "echo"`) {
+		t.Fatalf("stdout missing final service JSON: %s", out.String())
 	}
 }
 
@@ -224,12 +237,62 @@ func TestServiceImportRecursiveRequest(t *testing.T) {
 		if _, ok := req["name"]; ok {
 			t.Fatalf("recursive request should not include name: %+v", req)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"services": []any{}, "service_count": 0})
+		_, _ = fmt.Fprintln(w, `{"type":"complete","status":"ok","services":[],"restarted_instances":{},"restart_errors":{}}`)
 	}))
 	defer server.Close()
 	c := &CLI{AdminAddr: strings.TrimPrefix(server.URL, "http://"), Client: server.Client(), Stdout: io.Discard}
 	if err := c.Run([]string{"service", "import", "--recursive", source}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestServiceImportStreamProgressAndComplete(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") != "application/x-ndjson" {
+			t.Fatalf("Accept=%q", r.Header.Get("Accept"))
+		}
+		_, _ = fmt.Fprintln(w, `{"type":"status","stage":"prepare_source","message":"Preparing service package","service_id":"echo"}`)
+		_, _ = fmt.Fprintln(w, `{"type":"complete","status":"ok","service":{"ID":"echo","PackageSource":"https://user:p%40ss@example.com/repo.git"},"restarted_instances":[],"restart_errors":[]}`)
+	}))
+	defer server.Close()
+	var stdout, stderr bytes.Buffer
+	c := &CLI{AdminAddr: strings.TrimPrefix(server.URL, "http://"), Client: server.Client(), Stdout: &stdout, Stderr: &stderr}
+	if err := c.Run([]string{"service", "import", "echo", "npm:pkg"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "echo: Preparing service package") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"ID": "echo"`) || strings.Contains(stdout.String(), "p%40ss") || !strings.Contains(stdout.String(), "******") {
+		t.Fatalf("stdout not redacted final JSON: %s", stdout.String())
+	}
+}
+
+func TestServiceImportStreamErrorEventReturnsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprintln(w, `{"type":"error","stage":"prepare_runtime","error":"npm install --omit=dev: context canceled"}`)
+	}))
+	defer server.Close()
+	c := &CLI{AdminAddr: strings.TrimPrefix(server.URL, "http://"), Client: server.Client(), Stdout: io.Discard, Stderr: io.Discard}
+	err := c.Run([]string{"service", "import", "echo", "npm:pkg"})
+	if err == nil || !strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestServiceImportStreamDegradedReturnsErrorAfterOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprintln(w, `{"type":"complete","status":"degraded","service":{"ID":"echo"},"restarted_instances":[],"restart_errors":["echo-test: boom"]}`)
+	}))
+	defer server.Close()
+	var out bytes.Buffer
+	c := &CLI{AdminAddr: strings.TrimPrefix(server.URL, "http://"), Client: server.Client(), Stdout: &out, Stderr: io.Discard}
+	err := c.Run([]string{"service", "import", "echo", "npm:pkg"})
+	if err == nil || !strings.Contains(err.Error(), "degraded") {
+		t.Fatalf("err=%v", err)
+	}
+	if !strings.Contains(out.String(), `"status": "degraded"`) {
+		t.Fatalf("stdout=%s", out.String())
 	}
 }
 
@@ -251,16 +314,20 @@ func TestServiceImportRecursiveRequestConvertsLocalNPMSourceToAbsolutePath(t *te
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatal(err)
 	}
+	absPkg, err := filepath.Abs("pkg")
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatal(err)
 		}
-		want := "npm:" + pkg
+		want := "npm:" + absPkg
 		if req["recursive"] != true || req["source"] != want {
 			t.Fatalf("unexpected recursive body: %+v want source %q", req, want)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"services": []any{}, "service_count": 0})
+		_, _ = fmt.Fprintln(w, `{"type":"complete","status":"ok","services":[],"restarted_instances":{},"restart_errors":{}}`)
 	}))
 	defer server.Close()
 	c := &CLI{AdminAddr: strings.TrimPrefix(server.URL, "http://"), Client: server.Client(), Stdout: io.Discard}
@@ -287,14 +354,18 @@ func TestNormalizeImportSourcePreservesServiceRoot(t *testing.T) {
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatal(err)
 	}
+	absPkg, err := filepath.Abs("pkg")
+	if err != nil {
+		t.Fatal(err)
+	}
 	gitSource := "https://user:p%40ss@example.com/acme/repo.git//svc@v1.0.0"
 	tests := []struct {
 		name   string
 		source string
 		want   string
 	}{
-		{name: "local service root", source: "./pkg//nested", want: pkg + "//nested"},
-		{name: "npm local service root", source: "npm:./pkg//nested", want: "npm:" + pkg + "//nested"},
+		{name: "local service root", source: "./pkg//nested", want: absPkg + "//nested"},
+		{name: "npm local service root", source: "npm:./pkg//nested", want: "npm:" + absPkg + "//nested"},
 		{name: "https git unchanged", source: gitSource, want: gitSource},
 	}
 	for _, tc := range tests {
@@ -328,15 +399,19 @@ func TestServiceImportRequestConvertsLocalSourceToAbsolutePath(t *testing.T) {
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatal(err)
 	}
+	absSource, err := filepath.Abs("service.tgz")
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatal(err)
 		}
-		if req["source"] != source {
-			t.Fatalf("source=%q want %q", req["source"], source)
+		if req["source"] != absSource {
+			t.Fatalf("source=%q want %q", req["source"], absSource)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": "echo"})
+		_, _ = fmt.Fprintln(w, `{"type":"complete","status":"ok","service":{"ID":"echo"},"restarted_instances":[],"restart_errors":[]}`)
 	}))
 	defer server.Close()
 	c := &CLI{AdminAddr: strings.TrimPrefix(server.URL, "http://"), Client: server.Client(), Stdout: io.Discard}
@@ -363,16 +438,20 @@ func TestServiceImportRequestConvertsLocalNPMSourceToAbsolutePath(t *testing.T) 
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatal(err)
 	}
+	absPkg, err := filepath.Abs("pkg")
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatal(err)
 		}
-		want := "npm:" + pkg
+		want := "npm:" + absPkg
 		if req["source"] != want {
 			t.Fatalf("source=%q want %q", req["source"], want)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": "echo"})
+		_, _ = fmt.Fprintln(w, `{"type":"complete","status":"ok","service":{"ID":"echo"},"restarted_instances":[],"restart_errors":[]}`)
 	}))
 	defer server.Close()
 	c := &CLI{AdminAddr: strings.TrimPrefix(server.URL, "http://"), Client: server.Client(), Stdout: io.Discard}

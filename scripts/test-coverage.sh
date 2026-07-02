@@ -6,7 +6,10 @@ coverpkg="$(
     grep -v '^octobus/internal/integration$' |
     paste -sd, -
 )"
-mapfile -t unit_pkgs < <(
+unit_pkgs=()
+while IFS= read -r pkg; do
+  unit_pkgs+=("$pkg")
+done < <(
   go list ./cmd/... ./internal/... |
     grep -v '^octobus/internal/integration$'
 )

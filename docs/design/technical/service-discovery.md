@@ -121,7 +121,7 @@ grpcurl \
   describe gitlab.MergeRequestService
 ```
 
-实际业务调用需要 capset 和 instance 路由 metadata。`x-octobus-service` 已废弃并会被忽略：
+实际业务调用需要 capset 和 instance 路由 metadata：
 
 ```text
 grpcurl \

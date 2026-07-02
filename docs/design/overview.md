@@ -23,6 +23,7 @@ Octobus 是一个本地单程序能力网关。它管理可插拔的 Node.js ser
 - [technical/node-runtime.md](technical/node-runtime.md)
 - [technical/service-package.md](technical/service-package.md)
 - [technical/multi-service-npm-package.md](technical/multi-service-npm-package.md)
+- [technical/services-package-quality.md](technical/services-package-quality.md)
 - [technical/js-sdk.md](technical/js-sdk.md)
 - [technical/service-discovery.md](technical/service-discovery.md)
 - [technical/release.md](technical/release.md)
@@ -72,7 +73,7 @@ daemon 默认绑定 localhost，允许通过 `--addr` 显式绑定非 localhost 
 路由原则：
 
 - gRPC 保持原始 method path，通过 `x-octobus-capset` 和
-  `x-octobus-instance` metadata 选择目标；`x-octobus-service` 已废弃并被忽略。
+  `x-octobus-instance` metadata 选择目标。
 - Connect RPC 使用 `/capsets/{capset_id}/connect/{instance_id}/{full_service}/{method}`。
 - MCP 使用 `/capsets/{capset_id}/mcp`，tool name 默认
   `{service}__{instance}__{method}`，冲突时必须显式配置。
@@ -100,6 +101,10 @@ package。子目录 `package.json` 不参与 import/runtime 依赖解析或 entr
 JavaScript SDK 包名为 `@chaitin-ai/octobus-sdk`。它封装
 `--runtime serve` / `--runtime invoke` / `--runtime inspect` 等运行协议，但第三方
 service package 命名不强制包含 `octobus`。
+
+仓库内公开服务集成由 `services/` 下的 `@chaitin-ai/octobus-tentacles` 多服务
+distribution package 维护。该包的长期质量线、validator/test/pack/smoke 门禁和安全面约束
+记录在 [technical/services-package-quality.md](technical/services-package-quality.md)。
 
 ## Persistence And Runtime
 

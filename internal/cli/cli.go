@@ -27,6 +27,7 @@ type CLI struct {
 	Client    *http.Client
 	Stdin     io.Reader
 	Stdout    io.Writer
+	Stderr    io.Writer
 }
 
 func New() *CLI {
@@ -34,7 +35,7 @@ func New() *CLI {
 	if addr == "" {
 		addr = "127.0.0.1:9000"
 	}
-	return &CLI{AdminAddr: addr, Client: &http.Client{Timeout: 60 * time.Second}, Stdin: os.Stdin, Stdout: os.Stdout}
+	return &CLI{AdminAddr: addr, Client: &http.Client{Timeout: 60 * time.Second}, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
 }
 
 func (c *CLI) Run(args []string) error {
@@ -257,9 +258,9 @@ func (c *CLI) serviceImportCommand() *cobra.Command {
 				return err
 			}
 			if recursive {
-				return c.request(http.MethodPost, "/admin/v1/services/import", map[string]any{"recursive": true, "source": source, "offline": offline, "reinstall": reinstall, "build": build})
+				return c.requestServiceImport(map[string]any{"recursive": true, "source": source, "offline": offline, "reinstall": reinstall, "build": build})
 			}
-			return c.request(http.MethodPost, "/admin/v1/services/import", map[string]any{"service_id": args[0], "name": name, "source": source, "offline": offline, "reinstall": reinstall, "build": build})
+			return c.requestServiceImport(map[string]any{"service_id": args[0], "name": name, "source": source, "offline": offline, "reinstall": reinstall, "build": build})
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "service display name override")
@@ -1090,6 +1091,12 @@ func (c *CLI) requestRaw(method, path string, body any) error {
 	return c.requestAndPrint(method, path, body, false)
 }
 
+func (c *CLI) requestServiceImport(body any) error {
+	client := *c.Client
+	client.Timeout = 0
+	return c.doRequestWithClientAndHeaders(&client, http.MethodPost, "/admin/v1/services/import", body, map[string]string{"Accept": "application/x-ndjson"}, c.handleServiceImportStream)
+}
+
 func (c *CLI) requestStream(method, path string, body any) error {
 	client := *c.Client
 	client.Timeout = 0
@@ -1119,6 +1126,10 @@ func (c *CLI) doRequest(method, path string, body any, handle func(*http.Respons
 }
 
 func (c *CLI) doRequestWithClient(client *http.Client, method, path string, body any, handle func(*http.Response) error) error {
+	return c.doRequestWithClientAndHeaders(client, method, path, body, nil, handle)
+}
+
+func (c *CLI) doRequestWithClientAndHeaders(client *http.Client, method, path string, body any, headers map[string]string, handle func(*http.Response) error) error {
 	var reader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -1136,6 +1147,9 @@ func (c *CLI) doRequestWithClient(client *http.Client, method, path string, body
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
 	if path != "/admin/v1/status" {
 		token, err := c.adminToken()
 		if err != nil {
@@ -1162,6 +1176,99 @@ func (c *CLI) doRequestWithClient(client *http.Client, method, path string, body
 		return fmt.Errorf("admin API failed: %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
 	return handle(resp)
+}
+
+func (c *CLI) handleServiceImportStream(resp *http.Response) error {
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var event map[string]any
+		if err := dec.Decode(&event); err != nil {
+			if errors.Is(err, io.EOF) {
+				return errors.New("service import stream ended without a complete event")
+			}
+			return err
+		}
+		eventType, _ := event["type"].(string)
+		switch eventType {
+		case "status", "progress":
+			if err := c.printServiceImportProgress(event); err != nil {
+				return err
+			}
+		case "error":
+			msg, _ := event["error"].(string)
+			if msg == "" {
+				msg = "service import failed"
+			}
+			return errors.New(msg)
+		case "complete":
+			if err := c.printServiceImportComplete(event); err != nil {
+				return err
+			}
+			if status, _ := event["status"].(string); status == "degraded" {
+				return errors.New("service import completed with degraded status")
+			}
+			return nil
+		default:
+			return fmt.Errorf("unknown service import stream event type %q", eventType)
+		}
+	}
+}
+
+func (c *CLI) printServiceImportProgress(event map[string]any) error {
+	message, _ := event["message"].(string)
+	if message == "" {
+		message, _ = event["stage"].(string)
+	}
+	if message == "" {
+		return nil
+	}
+	if current, total := jsonNumberInt(event["current"]), jsonNumberInt(event["total"]); current > 0 && total > 0 {
+		message = fmt.Sprintf("[%d/%d] %s", current, total, message)
+	}
+	if serviceID, _ := event["service_id"].(string); serviceID != "" {
+		message = fmt.Sprintf("%s: %s", serviceID, message)
+	}
+	stderr := c.Stderr
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	_, err := fmt.Fprintln(stderr, message)
+	return err
+}
+
+func (c *CLI) printServiceImportComplete(event map[string]any) error {
+	body := make(map[string]any, len(event)+1)
+	for key, value := range event {
+		if key == "type" || key == "stage" || key == "message" || key == "error" || key == "current" || key == "total" || key == "service_id" {
+			continue
+		}
+		if key == "status" && value == "ok" {
+			continue
+		}
+		body[key] = value
+	}
+	if services, ok := body["services"].([]any); ok {
+		if _, exists := body["service_count"]; !exists {
+			body["service_count"] = len(services)
+		}
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(c.Stdout, string(redactJSON(raw)))
+	return err
+}
+
+func jsonNumberInt(v any) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	default:
+		return 0
+	}
 }
 
 func (c *CLI) adminToken() (string, error) {

@@ -1,6 +1,20 @@
-# OctoBus
+<p align="center">
+  <img src="octobuslogo.jpg" alt="OctoBus" width="240">
+</p>
 
-[![ci](https://github.com/chaitin/OctoBus/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chaitin/OctoBus/actions/workflows/ci.yml)
+<p align="center">
+  <a href="https://github.com/chaitin/OctoBus/actions/workflows/ci.yml">
+    <img src="https://github.com/chaitin/OctoBus/actions/workflows/ci.yml/badge.svg?branch=main" alt="ci">
+  </a>
+  <a href="./CONTRIBUTING.zh-CN.md">
+    <img src="https://img.shields.io/badge/贡献者-指南-blue" alt="contributing">
+  </a>
+  <a href="./SECURITY.zh-CN.md">
+    <img src="https://img.shields.io/badge/安全合规-反馈-blue" alt="security">
+  </a>
+</p>
+
+---
 
 OctoBus 是一个本地运行的单程序网关，用来管理可插拔的 Node.js service package，并把这些 package 中的 gRPC 能力按 capset 暴露给客户端或 agent
 
@@ -26,6 +40,23 @@ daemon 默认监听单一端口 `127.0.0.1:9000`。admin API、gRPC、Connect RP
 service package 默认使用 `long-running` 运行模式：instance 创建或启动后会拉起一个常驻 Node.js gRPC 子进程。package 也可以在 `service.json` 中声明 `"runtime":{"mode":"on-demand"}`：这类 instance 不预启动、不保存 PID 或监听地址，每次请求到达时由 OctoBus 启动一次短生命周期 `invoke` 子进程。
 
 ## 启动 daemon
+
+### 从 npm 安装
+
+OctoBus 以 `@chaitin-ai/octobus` npm package 发布。主 package 会安装一个很小的 Node.js launcher，并通过平台相关的 optional dependencies 拉取匹配的原生 Go binary，例如 `@chaitin-ai/octobus-linux-x64`。
+
+```bash
+npm install -g @chaitin-ai/octobus
+octobus serve
+```
+
+也可以不做全局安装，直接运行：
+
+```bash
+npx @chaitin-ai/octobus serve
+```
+
+npm package 只安装 `octobus` binary。常规 service import 和 runtime 流程仍然需要本机提供 `node`、`npm`、`protoc` 和 `git`，见下方依赖说明。
 
 ### 使用 Docker 运行
 
@@ -79,6 +110,12 @@ export OCTOBUS_ADDR="127.0.0.1:9000"
 - `npm`：导入 service 时拉取 npm package，并在 runtime dir 中安装生产依赖
 - `protoc`：导入 service 时编译 proto descriptor
 - `git`：从 HTTPS Git source 导入 service 时拉取和归档 package
+
+如果 `go build` 或 `task build` 在下载 Go 模块时超时（例如 `proxy.golang.org` 报 `dial tcp ... i/o timeout`），可以配置 Go 模块代理：
+
+```bash
+go env -w GOPROXY=https://goproxy.cn,direct
+```
 
 ## 基本使用流程
 
@@ -160,7 +197,7 @@ curl -X POST \
 
 补充提示：
 
-- `service import` 除了本地目录，也支持 `.tgz`、`.zip`、`npm:` source 和 HTTPS Git source；所有 source 都可追加 `//service-dir` 来选择 distribution package 内的 service root，例如 `npm:@scope/tentacle@1.0.0//Hanqing_Ticket` 或 `https://github.com/acme/tentacle.git//Hanqing_Ticket@v1.0.0`；离线导入、强制重装依赖等参数可查看 `./bin/octobus service import --help`
+- `service import` 除了本地目录，也支持本地和远程 HTTP(S) `.tgz` / `.tar.gz` / `.zip` 归档包、`npm:` source 和 HTTPS Git source；除远程 HTTP(S) 归档 URL 外，package source 都可追加 `//service-dir` 来选择 distribution package 内的 service root，例如 `npm:@scope/tentacle@1.0.0//Hanqing_Ticket` 或 `https://github.com/acme/tentacle.git//Hanqing_Ticket@v1.0.0`。远程归档 URL 使用包根目录作为 service root；multi-service 归档可用 recursive import。离线导入、强制重装依赖等参数可查看 `./bin/octobus service import --help`
 - 使用 `service import --recursive SOURCE` 可以一次导入 multi-service distribution package 中发现到的所有 service root，例如 `./bin/octobus service import --recursive npm:@chaitin-ai/octobus-tentacles`。recursive 模式下，`SOURCE//some-dir` 表示递归发现的 scan root；每个导入的 service id 来自对应 `service.json.name`
 - `instance` 支持 `list/get/update/delete/update-config/update-secret/start/stop/restart`；`create` 对 `long-running` service 默认会立即启动实例，配置可以来自 `--config`、`--config-json` 或 stdin，敏感信息可以来自 `--secret`、`--secret-json` 或 stdin
 - `on-demand` instance 会保持 enabled/running 的逻辑状态，但 `start/stop/restart` 和带 `--restart` 的配置更新会返回运行模式不支持持久运行时控制的错误
@@ -199,9 +236,6 @@ grpcurl -plaintext \
   127.0.0.1:9000 \
   gitlab.MergeRequestService/List
 ```
-
-`x-octobus-service` is deprecated and ignored for gRPC routing; callers should
-route with `x-octobus-capset` and `x-octobus-instance`.
 
 OctoBus 转发到后端 Node instance 前会剥离 `x-octobus-*` 控制 metadata，但 `x-octobus-ext-*` 是透传例外。业务扩展 metadata 使用 `x-octobus-ext-*` 命名，例如 `x-octobus-ext-business-request-id` 和 `x-octobus-ext-username`，会透传给 service package。calculator 示例优先读取 `x-octobus-ext-business-request-id`，并兼容旧的 `x-business-request-id`。long-running service 的 gRPC 网关支持 unary、server streaming、client streaming 和 bidirectional streaming；on-demand service 只支持 unary invoke。
 

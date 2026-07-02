@@ -406,6 +406,10 @@ func (s *Server) handleServiceImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if acceptsNDJSON(r) {
+		s.handleStreamingServiceImport(w, r, req)
+		return
+	}
 	if req.Recursive {
 		s.handleRecursiveServiceImport(w, r, req)
 		return
@@ -480,6 +484,81 @@ func (s *Server) handleRecursiveServiceImport(w http.ResponseWriter, r *http.Req
 func (s *Server) echoServiceImport(c *echo.Context) error {
 	s.handleServiceImport(c.Response(), c.Request())
 	return nil
+}
+
+func (s *Server) handleStreamingServiceImport(w http.ResponseWriter, r *http.Request, req packageimport.Options) {
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.WriteHeader(http.StatusOK)
+	if err := flushHTTP(w); err != nil {
+		return
+	}
+	writeEvent := func(event packageimport.ImportProgressEvent) error {
+		return writeNDJSONEvent(w, event)
+	}
+	req.Progress = writeEvent
+	if req.Recursive {
+		s.handleStreamingRecursiveServiceImport(w, r, req, writeEvent)
+		return
+	}
+	s.logger().Info("service_import_started", "service_id", req.ServiceID, "offline", req.Offline, "reinstall", req.Reinstall, "build", req.Build)
+	res, err := s.Importer.Import(r.Context(), req)
+	if err != nil {
+		s.logger().Warn("service_import_failed", "service_id", req.ServiceID, "error", err)
+		_ = writeEvent(packageimport.ImportProgressEvent{Type: "error", Error: err.Error()})
+		return
+	}
+	s.logger().Info("service_import_done", "service_id", res.Service.ID, "runtime_mode", res.Service.RuntimeMode, "descriptor_sha256", res.Service.DescriptorSHA256, "method_count", len(res.Service.Methods))
+	if err := writeEvent(packageimport.ImportProgressEvent{Type: "status", Stage: "restart_instances", Message: "Restarting enabled service instances", ServiceID: res.Service.ID}); err != nil {
+		return
+	}
+	restarted, restartErrs := s.restartEnabledServiceInstances(r.Context(), res.Service.ID)
+	if restarted == nil {
+		restarted = []string{}
+	}
+	if restartErrs == nil {
+		restartErrs = []string{}
+	}
+	status := "ok"
+	if len(restartErrs) > 0 {
+		status = "degraded"
+	}
+	_ = writeEvent(packageimport.ImportProgressEvent{Type: "complete", Status: status, Service: &res.Service, RestartedInstances: restarted, RestartErrors: restartErrs})
+}
+
+func (s *Server) handleStreamingRecursiveServiceImport(w http.ResponseWriter, r *http.Request, req packageimport.Options, writeEvent func(packageimport.ImportProgressEvent) error) {
+	s.logger().Info("service_import_recursive_started", "offline", req.Offline, "reinstall", req.Reinstall, "build", req.Build)
+	res, err := s.Importer.ImportRecursive(r.Context(), req)
+	if err != nil {
+		s.logger().Warn("service_import_recursive_failed", "error", err)
+		_ = writeEvent(packageimport.ImportProgressEvent{Type: "error", Error: err.Error()})
+		return
+	}
+	s.logger().Info("service_import_recursive_done", "service_count", len(res.Services))
+	restartedByService := make(map[string][]string, len(res.Services))
+	restartErrsByService := make(map[string][]string, len(res.Services))
+	degraded := false
+	for idx, svc := range res.Services {
+		if err := writeEvent(packageimport.ImportProgressEvent{Type: "status", Stage: "restart_instances", Message: "Restarting enabled service instances", ServiceID: svc.ID, Current: idx + 1, Total: len(res.Services)}); err != nil {
+			return
+		}
+		restarted, restartErrs := s.restartEnabledServiceInstances(r.Context(), svc.ID)
+		if restarted == nil {
+			restarted = []string{}
+		}
+		if restartErrs == nil {
+			restartErrs = []string{}
+		}
+		restartedByService[svc.ID] = restarted
+		restartErrsByService[svc.ID] = restartErrs
+		if len(restartErrs) > 0 {
+			degraded = true
+		}
+	}
+	status := "ok"
+	if degraded {
+		status = "degraded"
+	}
+	_ = writeEvent(packageimport.ImportProgressEvent{Type: "complete", Status: status, Services: res.Services, RestartedInstances: restartedByService, RestartErrors: restartErrsByService})
 }
 
 func (s *Server) handleAdminTokens(w http.ResponseWriter, r *http.Request) {
@@ -1274,4 +1353,25 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": map[string]any{"code": fmt.Sprintf("HTTP_%d", status), "message": msg, "details": map[string]any{}}})
+}
+
+func acceptsNDJSON(r *http.Request) bool {
+	for _, part := range strings.Split(r.Header.Get("Accept"), ",") {
+		mediaType := strings.TrimSpace(strings.SplitN(part, ";", 2)[0])
+		if mediaType == "application/x-ndjson" {
+			return true
+		}
+	}
+	return false
+}
+
+func writeNDJSONEvent(w http.ResponseWriter, event packageimport.ImportProgressEvent) error {
+	if err := json.NewEncoder(w).Encode(event); err != nil {
+		return err
+	}
+	return flushHTTP(w)
+}
+
+func flushHTTP(w http.ResponseWriter) error {
+	return http.NewResponseController(w).Flush()
 }

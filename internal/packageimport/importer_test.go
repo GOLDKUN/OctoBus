@@ -7,7 +7,10 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,6 +44,55 @@ func TestImporterImportsDirectoryPackage(t *testing.T) {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected artifact %s: %v", path, err)
 		}
+	}
+}
+
+func TestImporterReportsSingleServiceProgress(t *testing.T) {
+	dataDir, s := openTestStore(t)
+	pkg := writeTestPackage(t, t.TempDir(), `{"schema":"chaitin.octobus.service.v1","name":"echo-wrapper","proto":{"roots":["proto"],"files":["proto/echo.proto"]}}`)
+	var events []ImportProgressEvent
+	_, err := (&Importer{DataDir: dataDir, Store: s}).Import(context.Background(), Options{
+		ServiceID: "echo",
+		Source:    pkg,
+		Offline:   true,
+		Progress: func(event ImportProgressEvent) error {
+			events = append(events, event)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []string{"prepare_source", "build_package", "validate_manifest", "prepare_runtime", "compile_descriptor", "commit_service"} {
+		if !hasImportProgressStage(events, stage) {
+			t.Fatalf("missing progress stage %q in %+v", stage, events)
+		}
+	}
+}
+
+func TestImporterProgressErrorAbortsAndCleansStaging(t *testing.T) {
+	dataDir, s := openTestStore(t)
+	pkg := writeTestPackage(t, t.TempDir(), `{"schema":"chaitin.octobus.service.v1","name":"echo-wrapper","proto":{"roots":["proto"],"files":["proto/echo.proto"]}}`)
+	progressErr := errors.New("progress sink closed")
+	_, err := (&Importer{DataDir: dataDir, Store: s}).Import(context.Background(), Options{
+		ServiceID: "echo",
+		Source:    pkg,
+		Offline:   true,
+		Progress: func(event ImportProgressEvent) error {
+			if event.Stage == "build_package" {
+				return progressErr
+			}
+			return nil
+		},
+	})
+	if !errors.Is(err, progressErr) {
+		t.Fatalf("err=%v want %v", err, progressErr)
+	}
+	if _, err := s.GetService(context.Background(), "echo"); err == nil {
+		t.Fatal("service was committed after progress failure")
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "artifacts", "services", ".staging-echo")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging cleanup err=%v", err)
 	}
 }
 
@@ -95,9 +147,34 @@ message ListResponse { string text = 1; }
 func TestImporterImportRecursiveImportsMultiServicePackage(t *testing.T) {
 	dataDir, s := openTestStore(t)
 	pkg := writeMultiServiceTestPackage(t, t.TempDir())
-	res, err := (&Importer{DataDir: dataDir, Store: s}).ImportRecursive(context.Background(), Options{Source: pkg.Root, Recursive: true, Offline: true, Build: "never"})
+	var events []ImportProgressEvent
+	res, err := (&Importer{DataDir: dataDir, Store: s}).ImportRecursive(context.Background(), Options{
+		Source:    pkg.Root,
+		Recursive: true,
+		Offline:   true,
+		Build:     "never",
+		Progress: func(event ImportProgressEvent) error {
+			events = append(events, event)
+			return nil
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !hasImportProgressStage(events, "prepare_source") || !hasImportProgressStage(events, "prepare_runtime") {
+		t.Fatalf("recursive import missing package-level progress: %+v", events)
+	}
+	compileEvents := 0
+	for _, event := range events {
+		if event.Stage == "compile_descriptor" {
+			compileEvents++
+			if event.Current == 0 || event.Total != len(pkg.Services) || event.ServiceID == "" {
+				t.Fatalf("bad recursive compile progress event: %+v", event)
+			}
+		}
+	}
+	if compileEvents != len(pkg.Services) {
+		t.Fatalf("compile progress events=%d want %d in %+v", compileEvents, len(pkg.Services), events)
 	}
 	if res.ServiceCount != len(pkg.Services) || len(res.Services) != len(pkg.Services) || len(res.Manifests) != len(pkg.Services) {
 		t.Fatalf("unexpected recursive result: %+v", res)
@@ -890,6 +967,70 @@ func TestPrepareSourceFileArchives(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(prepared.PackageDir, "service.json")); err != nil {
 		t.Fatalf("zip package was not extracted: %v", err)
+	}
+}
+
+func TestPrepareSourceRemoteArchives(t *testing.T) {
+	dataDir, s := openTestStore(t)
+	imp := &Importer{DataDir: dataDir, Store: s}
+	pkg := writeTestPackage(t, t.TempDir(), `{"schema":"chaitin.octobus.service.v1","name":"echo-wrapper","proto":{"roots":["proto"],"files":["proto/echo.proto"]}}`)
+
+	tgz := filepath.Join(t.TempDir(), "package.tgz")
+	writeTarGzPackage(t, tgz, pkg)
+	zipPath := filepath.Join(t.TempDir(), "package.zip")
+	writeZipPackage(t, zipPath, pkg)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/package.tgz":
+			http.ServeFile(w, r, tgz)
+		case "/package.zip":
+			http.ServeFile(w, r, zipPath)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	prepared, err := imp.prepareSource(context.Background(), Options{Source: server.URL + "/package.tgz?X-Amz-Signature=test"}, filepath.Join(t.TempDir(), "remote-tgz-staging"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.BuildAllowed || filepath.Base(prepared.ArtifactPath) != "package.tgz" || prepared.PackageSource != server.URL+"/package.tgz" {
+		t.Fatalf("unexpected remote tgz prepared source: %+v", prepared)
+	}
+	if _, err := os.Stat(filepath.Join(prepared.PackageDir, "service.json")); err != nil {
+		t.Fatalf("remote tgz package was not extracted: %v", err)
+	}
+
+	prepared, err = imp.prepareSource(context.Background(), Options{Source: server.URL + "/package.zip"}, filepath.Join(t.TempDir(), "remote-zip-staging"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(prepared.ArtifactPath) != "package.zip" {
+		t.Fatalf("unexpected remote zip artifact path: %+v", prepared)
+	}
+	if _, err := os.Stat(filepath.Join(prepared.PackageDir, "service.json")); err != nil {
+		t.Fatalf("remote zip package was not extracted: %v", err)
+	}
+}
+
+func TestPrepareSourceRemoteArchiveErrorsRedactSignedURL(t *testing.T) {
+	dataDir, s := openTestStore(t)
+	imp := &Importer{DataDir: dataDir, Store: s}
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+
+	source := server.URL + "/missing.zip?X-Amz-Signature=secret"
+	_, err := imp.prepareSource(context.Background(), Options{Source: source}, filepath.Join(t.TempDir(), "remote-error-staging"))
+	if err == nil {
+		t.Fatal("expected remote archive download error")
+	}
+	if strings.Contains(err.Error(), "X-Amz-Signature") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("remote archive error leaked signed URL: %v", err)
+	}
+	if !strings.Contains(err.Error(), server.URL+"/missing.zip") {
+		t.Fatalf("remote archive error lost useful source context: %v", err)
 	}
 }
 
@@ -2031,4 +2172,13 @@ func walkPackage(t *testing.T, src string, fn func(path, rel string, info os.Fil
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func hasImportProgressStage(events []ImportProgressEvent, stage string) bool {
+	for _, event := range events {
+		if event.Stage == stage {
+			return true
+		}
+	}
+	return false
 }
