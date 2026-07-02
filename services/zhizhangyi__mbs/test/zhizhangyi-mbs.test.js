@@ -56,14 +56,14 @@ test('AddUser requires password before calling upstream', async () => {
   assert.equal(called, false);
 });
 
-test('GetUsers preserves falsy state and is_mdm filters', async () => {
+test('GetUsers preserves falsy state, is_mdm, and status fields', async () => {
   let captured;
   globalThis.fetch = async (url, init) => {
     captured = { url, init };
-    return { ok: true, status: 200, text: async () => '{"code":0,"data":{"total":0,"userInfos":[]}}' };
+    return { ok: true, status: 200, text: async () => '{"code":0,"data":{"total":1,"userInfos":[{"userId":"user-1","status":0}]}}' };
   };
 
-  await rpcdef(buildCtx({ condition: { dept_id: '1', state: 0, is_mdm: 0 } }))[GET_USERS]();
+  const result = await rpcdef(buildCtx({ condition: { dept_id: '1', state: 0, is_mdm: 0 } }))[GET_USERS]();
 
   assert.equal(captured.url, 'https://mbs.example/uusafe/mos/thirdaccess/rest/opt/v1/getUsers');
   assert.deepEqual(JSON.parse(captured.init.body).condition, {
@@ -72,6 +72,7 @@ test('GetUsers preserves falsy state and is_mdm filters', async () => {
     state: 0,
     isMdm: 0,
   });
+  assert.equal(result.data.user_infos[0].status, 0);
 });
 
 test('fetch uses AbortSignal and undici dispatcher for timeout and TLS skip', async () => {
@@ -95,6 +96,17 @@ test('fetch uses AbortSignal and undici dispatcher for timeout and TLS skip', as
   assert.equal(Object.hasOwn(captured.init, 'timeoutMs'), false);
   assert.equal(Object.hasOwn(captured.init, 'insecureSkipVerify'), false);
   assert.equal(Object.hasOwn(captured.init, 'tlsInsecureSkipVerify'), false);
+  let second;
+  globalThis.fetch = async (url, init) => {
+    second = { url, init };
+    return { ok: true, status: 200, text: async () => '{"code":0,"data":{"total":0,"userInfos":[]}}' };
+  };
+  await rpcdef({
+    config: { endpoint: 'https://mbs.example', skipTlsVerify: true },
+    secret: { appkey: 'appkey', secretkey: 'secretkey', orgCode: 'org' },
+    req: { condition: { dept_id: '1' } },
+  })[GET_USERS]();
+  assert.equal(second.init.dispatcher, captured.init.dispatcher);
 });
 
 test('GetUsers requires dept_id before calling upstream', async () => {
@@ -148,19 +160,21 @@ test('AddUser forwards caller-provided 3DES-encrypted password value', async () 
   assert.equal(result.data.structValue.fields.created.boolValue, true);
 });
 
-test('AddUser omits empty numeric fields instead of sending zero values', async () => {
+test('AddUser omits empty and invalid numeric fields instead of sending zero or null values', async () => {
   let captured;
   globalThis.fetch = async (url, init) => {
     captured = { url, init };
     return { ok: true, status: 200, text: async () => '{"code":0,"data":{}}' };
   };
 
-  await rpcdef(buildCtx({ user_name: 'User', login_name: 'user', dept_id: 'dept', password: '3des-ciphertext', is_mdm: '', state: '', weight: '' }))[ADD_USER]();
+  await rpcdef(buildCtx({ user_name: 'User', login_name: 'user', dept_id: 'dept', password: '3des-ciphertext', user_source: 'abc', is_mdm: 'NaN', state: 'Infinity', weight: '' }))[ADD_USER]();
 
   const body = JSON.parse(captured.init.body);
   assert.equal(Object.hasOwn(body, 'isMdm'), false);
   assert.equal(Object.hasOwn(body, 'state'), false);
   assert.equal(Object.hasOwn(body, 'weight'), false);
+  assert.equal(Object.hasOwn(body, 'userSource'), false);
+  assert.equal(JSON.stringify(body).includes('null'), false);
 });
 
 test('UpdUser requires dept_id before calling upstream', async () => {

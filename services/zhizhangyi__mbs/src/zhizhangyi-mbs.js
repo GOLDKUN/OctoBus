@@ -5,6 +5,7 @@ import { Agent } from 'undici';
 
 const DEF_TO = 30000;
 const BASE = '/uusafe/mos/thirdaccess/rest/opt';
+const insecureDispatcher = new Agent({ connect: { rejectUnauthorized: false } });
 
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o ?? {}, k);
 const first = (...vs) => vs.find((v) => v !== undefined && v !== null);
@@ -14,13 +15,16 @@ const md5 = (s) => crypto.createHash('md5').update(s, 'utf8').digest('hex');
 const signCalc = (sk, ...ps) => md5(ps.map((p) => (p === undefined || p === null ? '' : String(p))).join('') + String(sk || ''));
 const arr = (v) => Array.isArray(v) ? v : [];
 const str = (v) => (v === undefined || v === null || v === '') ? undefined : String(v);
-const num = (v) => (v === undefined || v === null || v === '') ? undefined : Number(v);
+const num = (v) => {
+  if (v === undefined || v === null || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
 const gc = (c) => ({ INVALID_ARGUMENT: grpcStatus.INVALID_ARGUMENT, FAILED_PRECONDITION: grpcStatus.FAILED_PRECONDITION, PERMISSION_DENIED: grpcStatus.PERMISSION_DENIED, UNAVAILABLE: grpcStatus.UNAVAILABLE, DEADLINE_EXCEEDED: grpcStatus.DEADLINE_EXCEEDED })[c] ?? grpcStatus.UNKNOWN;
 const er = (c, m) => { const e = new GrpcError(gc(c), c + ': ' + m); e.legacyCode = c; return e; };
 const doFetch = async (url, init, to, st) => {
-  const dispatcher = st ? new Agent({ connect: { rejectUnauthorized: false } }) : undefined;
   const signal = to ? AbortSignal.timeout(Number(to)) : undefined;
-  try { return await fetch(url, { ...init, ...(dispatcher && { dispatcher }), ...(signal && { signal }) }); } catch (e) { throw er('UNAVAILABLE', e?.cause?.message || e?.message || 'fetch failed'); }
+  try { return await fetch(url, { ...init, ...(st && { dispatcher: insecureDispatcher }), ...(signal && { signal }) }); } catch (e) { throw er('UNAVAILABLE', e?.cause?.message || e?.message || 'fetch failed'); }
 };
 const rdJson = async (res) => { const t = await res.text(); if (!res.ok) { const safe = t.length > 200 ? t.slice(0, 200) + '...' : t; throw er(res.status === 401 || res.status === 403 ? 'PERMISSION_DENIED' : res.status >= 400 && res.status < 500 ? 'FAILED_PRECONDITION' : 'UNAVAILABLE', 'http ' + res.status + ': ' + safe); } if (!t.trim()) return {}; try { return JSON.parse(t); } catch { throw er('UNKNOWN', 'not JSON'); } };
 const check = (j) => { if (j.code !== undefined && j.code !== 0) throw er('FAILED_PRECONDITION', 'MBS code=' + j.code + ': ' + (j.msg || '')); };
@@ -39,7 +43,7 @@ const toValue = (value) => {
   return { stringValue: String(value) };
 };
 
-const mapUser = (it) => ({ user_id: it?.userId ?? '', user_name: it?.userName ?? '', login_name: it?.loginName ?? '', phone_number: it?.phoneNumber ?? '', email: it?.email ?? '', employee_number: it?.employeeNumber ?? '', dept_id: it?.deptId ?? '', dept_name: it?.deptName ?? '', device_count: it?.deviceCount ?? 0, is_mdm: it?.isMdm ?? 0, state: it?.state ?? 0, is_admin: it?.isAdmin ?? 0, user_source: it?.userSource ?? 0, status: it?.status ?? 1, weight: it?.weight ?? 0, attrs: arr(it?.attrs).map((a) => ({ attr_key: a?.attrKey ?? '', attr_value: a?.attrValue ?? '' })), dept_full_id: it?.deptFullId ?? '', dept_full_path: it?.deptFullPath ?? '', job: it?.job ?? '', mobile: it?.mobile ?? '', address: it?.address ?? '', organization: it?.organization ?? '' });
+const mapUser = (it) => ({ user_id: it?.userId ?? '', user_name: it?.userName ?? '', login_name: it?.loginName ?? '', phone_number: it?.phoneNumber ?? '', email: it?.email ?? '', employee_number: it?.employeeNumber ?? '', dept_id: it?.deptId ?? '', dept_name: it?.deptName ?? '', device_count: it?.deviceCount ?? 0, is_mdm: it?.isMdm ?? 0, state: it?.state ?? 0, is_admin: it?.isAdmin ?? 0, user_source: it?.userSource ?? 0, status: it?.status ?? 0, weight: it?.weight ?? 0, attrs: arr(it?.attrs).map((a) => ({ attr_key: a?.attrKey ?? '', attr_value: a?.attrValue ?? '' })), dept_full_id: it?.deptFullId ?? '', dept_full_path: it?.deptFullPath ?? '', job: it?.job ?? '', mobile: it?.mobile ?? '', address: it?.address ?? '', organization: it?.organization ?? '' });
 const mapDetail = (it) => ({ user_id: it?.userId ?? '', user_name: it?.userName ?? '', login_name: it?.loginName ?? '', dept_id: it?.deptId ?? '', dept_name: it?.deptName ?? '', phone_number: it?.phoneNumber ?? '', job: it?.job ?? '', employee_number: it?.employeeNumber ?? '', address: it?.address ?? '', mobile: it?.mobile ?? '', email: it?.email ?? '', organization: it?.organization ?? '', is_mdm: it?.isMdm ?? 0, state: it?.state ?? 0, weight: it?.weight ?? 0, icon_file_id: it?.iconFileId ?? '', attrs: arr(it?.attrs).map((a) => ({ attr_key: a?.attrKey ?? '', attr_value: a?.attrValue ?? '' })) });
 const mapPhone = (it) => ({ user_id: it?.userId ?? '', user_name: it?.userName ?? '', login_name: it?.loginName ?? '', phone_number: it?.phoneNumber ?? '', email: it?.email ?? '' });
 
@@ -96,7 +100,9 @@ export function rpcdef(ctx) {
     const did = first(req?.dept_id, req?.deptId) || ''; const encryptedPw = first(req?.password) || '';
     if (!un) throw er('INVALID_ARGUMENT', 'user_name required'); if (!ln) throw er('INVALID_ARGUMENT', 'login_name required'); if (!did) throw er('INVALID_ARGUMENT', 'dept_id required'); if (!encryptedPw) throw er('INVALID_ARGUMENT', 'password required as 3DES-encrypted value');
     const sg = first(req?.sign) || signCalc(sk, apk, oc, un, ln, did, encryptedPw);
-    const body = { userName: un, loginName: ln, deptId: did, password: encryptedPw, userSource: Number(first(req?.user_source, req?.userSource) ?? 0), orgCode: oc, appkey: apk, sign: sg };
+    const body = { userName: un, loginName: ln, deptId: did, password: encryptedPw, orgCode: oc, appkey: apk, sign: sg };
+    const userSource = num(first(req?.user_source, req?.userSource));
+    if (userSource !== undefined) body.userSource = userSource;
     const sm = { phone_number: 'phoneNumber', job: 'job', employee_number: 'employeeNumber', address: 'address', mobile: 'mobile', email: 'email', organization: 'organization' };
     for (const [k, jk] of Object.entries(sm)) { const v = str(first(req?.[k])); if (v !== undefined) body[jk] = v; }
     for (const k of ['is_mdm', 'state', 'weight']) { const v = num(first(req?.[k])); if (v !== undefined) body[k === 'is_mdm' ? 'isMdm' : k] = v; }
