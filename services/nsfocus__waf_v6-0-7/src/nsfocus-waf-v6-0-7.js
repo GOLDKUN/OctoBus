@@ -193,10 +193,6 @@ class NSFOCUSWAFClient {
     this.headers = parseHeaders(bindings.headers);
     this.timeoutMs = Number(firstDefined(bindings.timeoutMs, bindings.timeout_ms, DEFAULT_TIMEOUT_MS)) || DEFAULT_TIMEOUT_MS;
     this.skipTlsVerify = Boolean(firstDefined(bindings.skipTlsVerify, bindings.skip_tls_verify, false));
-    // 自签名证书场景：跳过 Node.js 全局 fetch 的 TLS 验证
-    if (this.skipTlsVerify) {
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-    }
     // 时钟偏移量：从 JWT Token 的 iat 推算设备与本机的时差（秒）
     this.clockOffset = 0;
   }
@@ -277,8 +273,14 @@ class NSFOCUSWAFClient {
     const init = {
       method,
       headers: { ...this.headers, ...headers },
+      signal: AbortSignal.timeout(this.timeoutMs),
     };
     if (body) init.body = body;
+    // 自签名证书场景：使用 undici Agent 在单次请求粒度禁用 TLS 校验，不影响进程内其他 HTTPS 请求
+    if (this.skipTlsVerify) {
+      const { Agent } = await import("undici");
+      init.dispatcher = new Agent({ connect: { rejectUnauthorized: false } });
+    }
     let response;
     try {
       response = await fetch(url, init);
@@ -368,36 +370,49 @@ const blockIP = async (ctx) => {
   const ips = requireStringList(req, ["ips", "ip"], "ips", { max: MAX_IPS });
   const client = buildClient(ctx);
 
-  // index 自动分配：若用户未指定，从现有策略中找最大 index + 1
+  // index 自动分配：若用户未指定，从现有策略中找最大 index + 1。
+  // 注意：上游 API 不支持服务端自动分配 index，并发请求可能产生重复 index。
+  // 若用户显式传入了 index 则跳过自动分配。
   let index = coerceString(firstDefined(req.index)).trim();
-  if (!index) {
-    const existing = await client.request("/l4acl");
-    const policies = Array.isArray(existing) ? existing : [];
-    const maxIdx = policies.reduce((max, p) => Math.max(max, parseInt(p?.index, 10) || 0), 0);
-    index = String(maxIdx + 1);
+
+  // 带指数退避的重试：首次失败因 index 冲突时自动分配新 index 重试，最多 3 次
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (!req.index) {
+      const existing = await client.request("/l4acl");
+      const policies = Array.isArray(existing) ? existing : [];
+      const maxIdx = policies.reduce((max, p) => Math.max(max, parseInt(p?.index, 10) || 0), 0);
+      index = String(maxIdx + 1 + attempt); // 每次重试用递增 index
+    }
+
+    const json = await client.request("/l4acl", {
+      method: "POST",
+      body: buildL4AclPayload(req, ips, index),
+    });
+
+    const results = extractL4CreateResult(json);
+    const successResult = results.find((r) => r.policy_id) || results[0] || {};
+    const errors = results.filter((r) => r.result && !r.result.includes("created successfully") && !r.result.includes("success"));
+
+    // index 冲突时重试（非用户指定的 index）
+    const indexConflict = errors.some((e) => e.result && e.result.includes("index"));
+    if (indexConflict && !req.index && attempt < 2) {
+      continue;
+    }
+
+    if (errors.length > 0 && !successResult.policy_id) {
+      throw errorWithCode("INVALID_ARGUMENT", errors.map((e) => e.result).join("; "));
+    }
+
+    return {
+      policy_id: successResult.policy_id || "",
+      name: successResult.name || "",
+      result: successResult.result || "",
+      raw: toValue(json),
+    };
   }
 
-  const json = await client.request("/l4acl", {
-    method: "POST",
-    body: buildL4AclPayload(req, ips, index),
-  });
-
-  const results = extractL4CreateResult(json);
-  // 提取第一个成功的结果
-  const successResult = results.find((r) => r.policy_id) || results[0] || {};
-
-  // 检查是否有 multi_status 为 400 的错误
-  const errors = results.filter((r) => r.result && !r.result.includes("created successfully") && !r.result.includes("success"));
-  if (errors.length > 0 && !successResult.policy_id) {
-    throw errorWithCode("INVALID_ARGUMENT", errors.map((e) => e.result).join("; "));
-  }
-
-  return {
-    policy_id: successResult.policy_id || "",
-    name: successResult.name || "",
-    result: successResult.result || "",
-    raw: toValue(json),
-  };
+  // fallback 不会到达此处，但需要返回值满足语法
+  throw errorWithCode("UNKNOWN", "blockIP failed after max retries");
 };
 
 // ======================== Handler: ListBlockedIPs ========================
@@ -476,21 +491,27 @@ const unblockIP = async (ctx) => {
     throw errorWithCode("INVALID_ARGUMENT", "ips or policy_ids is required to unblock");
   }
 
-  // 逐个删除
+  /** 逐个删除，全部成功返回 OK，任意失败重试一次，仍失败则抛出错误 */
+  const MAX_DELETE_RETRIES = 1;
   const results = [];
   for (const pid of idsToDelete) {
     if (!pid) continue;
-    try {
-      const json = await client.request(`/l4acl/${pid}`, { method: "DELETE" });
-      results.push({
-        policy_id: pid,
-        result: coerceString(json?.result),
-      });
-    } catch (err) {
-      results.push({
-        policy_id: pid,
-        result: err?.message || "delete failed",
-      });
+    let lastErr;
+    for (let attempt = 0; attempt <= MAX_DELETE_RETRIES; attempt++) {
+      try {
+        const json = await client.request(`/l4acl/${pid}`, { method: "DELETE" });
+        results.push({
+          policy_id: pid,
+          result: coerceString(json?.result),
+        });
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    if (lastErr) {
+      throw errorWithCode("UNKNOWN", `unblockIP failed for policy_id=${pid}: ${lastErr?.message || lastErr}`);
     }
   }
 
