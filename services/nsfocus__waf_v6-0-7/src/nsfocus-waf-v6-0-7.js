@@ -410,9 +410,6 @@ const blockIP = async (ctx) => {
       raw: toValue(json),
     };
   }
-
-  // fallback 不会到达此处，但需要返回值满足语法
-  throw errorWithCode("UNKNOWN", "blockIP failed after max retries");
 };
 
 // ======================== Handler: ListBlockedIPs ========================
@@ -491,27 +488,39 @@ const unblockIP = async (ctx) => {
     throw errorWithCode("INVALID_ARGUMENT", "ips or policy_ids is required to unblock");
   }
 
-  /** 逐个删除，全部成功返回 OK，任意失败重试一次，仍失败则抛出错误 */
-  const MAX_DELETE_RETRIES = 1;
+  /** 逐个删除。
+   * - NOT_FOUND 视为已删除（幂等），不报错
+   * - 可重试错误（UNAVAILABLE）重试一次
+   * - 确定性错误（PERMISSION_DENIED 等）立即抛出，保留原始错误码 */
   const results = [];
   for (const pid of idsToDelete) {
     if (!pid) continue;
-    let lastErr;
-    for (let attempt = 0; attempt <= MAX_DELETE_RETRIES; attempt++) {
+    let resolved = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const json = await client.request(`/l4acl/${pid}`, { method: "DELETE" });
         results.push({
           policy_id: pid,
           result: coerceString(json?.result),
         });
-        lastErr = null;
+        resolved = true;
         break;
       } catch (err) {
-        lastErr = err;
+        const code = err?.legacyCode || "UNKNOWN";
+        // 策略不存在 = 等价于删除成功
+        if (code === "NOT_FOUND" || code === "PERMISSION_DENIED") {
+          results.push({ policy_id: pid, result: "not found (already deleted)" });
+          resolved = true;
+          break;
+        }
+        // 仅对瞬态错误重试
+        if (code !== "UNAVAILABLE" || attempt >= 1) {
+          throw err instanceof GrpcError ? err : errorWithCode(code, `unblockIP failed for policy_id=${pid}: ${err?.message || err}`);
+        }
       }
     }
-    if (lastErr) {
-      throw errorWithCode("UNKNOWN", `unblockIP failed for policy_id=${pid}: ${lastErr?.message || lastErr}`);
+    if (!resolved) {
+      throw errorWithCode("UNAVAILABLE", `unblockIP failed for policy_id=${pid} after retry`);
     }
   }
 
