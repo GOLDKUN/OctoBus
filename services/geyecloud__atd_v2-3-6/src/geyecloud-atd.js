@@ -60,10 +60,17 @@ const requirePositiveInteger = (value, field) => {
 
 export const normalizeBaseUrl = (value) => {
   const baseUrl = requireString(value, "config.baseUrl");
-  const parsed = new URL(baseUrl);
+  let parsed;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new GrpcError(grpcStatus.INVALID_ARGUMENT, "config.baseUrl is not a valid URL");
+  }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     throw new GrpcError(grpcStatus.INVALID_ARGUMENT, "config.baseUrl must use http or https");
   }
+  parsed.username = "";
+  parsed.password = "";
   parsed.pathname = parsed.pathname.replace(/\/+$/, "");
   parsed.search = "";
   parsed.hash = "";

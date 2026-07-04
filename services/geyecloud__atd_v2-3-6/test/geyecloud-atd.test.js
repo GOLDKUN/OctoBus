@@ -2,10 +2,46 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import test from "node:test";
 
+import { grpcStatus } from "@chaitin-ai/octobus-sdk";
+
 import { buildAuthHeaders, handlers, normalizeBaseUrl } from "../src/geyecloud-atd.js";
+
+const assertGrpcError = async (fn, code, message) => {
+  await assert.rejects(fn, (err) => {
+    assert.equal(err.code, code);
+    if (message) assert.match(err.message, message);
+    return true;
+  });
+};
 
 test("normalizeBaseUrl removes UI hash and trailing slash", () => {
   assert.equal(normalizeBaseUrl("https://192.0.2.10:5443/#/workBench"), "https://192.0.2.10:5443");
+});
+
+test("normalizeBaseUrl rejects malformed and unsupported URLs", () => {
+  assert.throws(
+    () => normalizeBaseUrl("not a url"),
+    (err) => {
+      assert.equal(err.code, grpcStatus.INVALID_ARGUMENT);
+      assert.match(err.message, /valid URL/);
+      return true;
+    },
+  );
+  assert.throws(
+    () => normalizeBaseUrl("ftp://192.0.2.10"),
+    (err) => {
+      assert.equal(err.code, grpcStatus.INVALID_ARGUMENT);
+      assert.match(err.message, /http or https/);
+      return true;
+    },
+  );
+});
+
+test("normalizeBaseUrl strips embedded credentials, query, and hash", () => {
+  assert.equal(
+    normalizeBaseUrl("https://user:pass@192.0.2.10:5443/?token=secret#/workBench"),
+    "https://192.0.2.10:5443",
+  );
 });
 
 test("buildAuthHeaders sends api-key and ATD signature headers", () => {
@@ -272,4 +308,98 @@ test("GetNetworkLogDetail sends detail id as upstream uuid", async () => {
   } finally {
     delete globalThis.__geyeCloudAtdTestRequest;
   }
+});
+
+test("upstream HTTP errors are mapped to unavailable", async () => {
+  const handler = handlers["geyecloud.atd.v1.GEYECloudATD/AggregateThreatEvents"];
+  globalThis.__geyeCloudAtdTestRequest = async () => ({
+    statusCode: 503,
+    body: "service unavailable",
+  });
+  try {
+    await assertGrpcError(
+      () =>
+        handler({
+          request: { start: 1773644567000, end: 1774249367000, terms: "severity" },
+          config: { baseUrl: "https://atd.example.com" },
+          secret: { apiKey: "dummy-api-key" },
+        }),
+      grpcStatus.UNAVAILABLE,
+      /upstream http 503/,
+    );
+  } finally {
+    delete globalThis.__geyeCloudAtdTestRequest;
+  }
+});
+
+test("invalid JSON upstream responses are mapped to unknown", async () => {
+  const handler = handlers["geyecloud.atd.v1.GEYECloudATD/AggregateThreatEvents"];
+  globalThis.__geyeCloudAtdTestRequest = async () => ({
+    statusCode: 200,
+    body: "<html>not json</html>",
+  });
+  try {
+    await assertGrpcError(
+      () =>
+        handler({
+          request: { start: 1773644567000, end: 1774249367000, terms: "severity" },
+          config: { baseUrl: "https://atd.example.com" },
+          secret: { apiKey: "dummy-api-key" },
+        }),
+      grpcStatus.UNKNOWN,
+      /not valid JSON/,
+    );
+  } finally {
+    delete globalThis.__geyeCloudAtdTestRequest;
+  }
+});
+
+test("network exceptions are mapped to unavailable", async () => {
+  const handler = handlers["geyecloud.atd.v1.GEYECloudATD/AggregateThreatEvents"];
+  globalThis.__geyeCloudAtdTestRequest = async () => {
+    throw new Error("request timeout");
+  };
+  try {
+    await assertGrpcError(
+      () =>
+        handler({
+          request: { start: 1773644567000, end: 1774249367000, terms: "severity" },
+          config: { baseUrl: "https://atd.example.com" },
+          secret: { apiKey: "dummy-api-key" },
+        }),
+      grpcStatus.UNAVAILABLE,
+      /request timeout/,
+    );
+  } finally {
+    delete globalThis.__geyeCloudAtdTestRequest;
+  }
+});
+
+test("upstream application errors are mapped to grpc statuses", async () => {
+  const handler = handlers["geyecloud.atd.v1.GEYECloudATD/AggregateThreatEvents"];
+  const cases = [
+    [401, grpcStatus.UNAUTHENTICATED],
+    [403, grpcStatus.PERMISSION_DENIED],
+    [404, grpcStatus.NOT_FOUND],
+    [500, grpcStatus.UNAVAILABLE],
+  ];
+
+  for (const [upstreamCode, grpcCode] of cases) {
+    globalThis.__geyeCloudAtdTestRequest = async () => ({
+      statusCode: 200,
+      body: JSON.stringify({ code: upstreamCode, msg: `error ${upstreamCode}` }),
+    });
+    await assertGrpcError(
+      () =>
+        handler({
+          request: { start: 1773644567000, end: 1774249367000, terms: "severity" },
+          config: { baseUrl: "https://atd.example.com" },
+          secret: { apiKey: "dummy-api-key" },
+        }),
+      grpcCode,
+      new RegExp(`error ${upstreamCode}`),
+    );
+  }
+
+  delete globalThis.__geyeCloudAtdTestRequest;
 });
