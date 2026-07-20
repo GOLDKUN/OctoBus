@@ -111,14 +111,22 @@ jobs:
           echo "Waiting for docker workflow to complete for ${release_tag}..."
           deadline=$((SECONDS + 1800))
           while true; do
-            docker_runs_json="$(gh api \
+            if ! docker_runs_json="$(gh api \
               --header 'Accept: application/vnd.github+json' \
               "repos/${GITHUB_REPOSITORY}/actions/workflows/docker.yml/runs?event=push&head_sha=${release_sha}&per_page=100")"
-            docker_run="$(jq -c \
+            then
+              echo "::error::Failed to query docker workflow runs for ${release_tag}"
+              exit 1
+            fi
+            if ! docker_run="$(jq -c \
               --arg branch "$release_tag" \
               '.workflow_runs
                 | map(select(.head_branch == $branch))
                 | first // empty' <<<"$docker_runs_json")"
+            then
+              echo "::error::Failed to parse docker workflow runs response for ${release_tag}"
+              exit 1
+            fi
             if [[ -n "$docker_run" ]]; then
               docker_status="$(jq -r '.status // ""' <<<"$docker_run")"
               docker_conclusion="$(jq -r '.conclusion // ""' <<<"$docker_run")"
