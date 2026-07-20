@@ -16,6 +16,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -40,6 +41,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_RUN_TAG: ${{ github.event.workflow_run.head_branch }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           MANUAL_RELEASE_TAG: ${{ inputs.release_tag }}
           DINGTALK_TARGETS_JSON: ${{ secrets.DINGTALK_TARGETS_JSON }}
           RELEASE_LLM_API_URL: ${{ secrets.RELEASE_LLM_API_URL }}
@@ -93,22 +95,97 @@ jobs:
             echo "::error::Release tag '$release_tag' does not exist in git history"
             exit 1
           fi
+          release_sha="$(git rev-parse "$current_ref")"
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
+            if [[ -z "${WORKFLOW_RUN_HEAD_SHA:-}" ]]; then
+              echo "::error::workflow_run head sha is required to verify release provenance"
+              exit 1
+            fi
+            if [[ "$WORKFLOW_RUN_HEAD_SHA" != "$release_sha" ]]; then
+              echo "::error::Release tag '$release_tag' currently points to $release_sha, but ci completed for $WORKFLOW_RUN_HEAD_SHA"
+              exit 1
+            fi
+          fi
+
+          echo "Waiting for docker workflow to complete for ${release_tag}..."
+          deadline=$((SECONDS + 1800))
+          while true; do
+            docker_runs_json="$(gh api \
+              --header 'Accept: application/vnd.github+json' \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/docker.yml/runs?event=push&head_sha=${release_sha}&per_page=100")"
+            docker_run="$(jq -c \
+              --arg branch "$release_tag" \
+              '.workflow_runs
+                | map(select(.head_branch == $branch))
+                | first // empty' <<<"$docker_runs_json")"
+            if [[ -n "$docker_run" ]]; then
+              docker_status="$(jq -r '.status // ""' <<<"$docker_run")"
+              docker_conclusion="$(jq -r '.conclusion // ""' <<<"$docker_run")"
+              docker_url="$(jq -r '.html_url // ""' <<<"$docker_run")"
+
+              if [[ "$docker_status" == "completed" ]]; then
+                if [[ "$docker_conclusion" == "success" ]]; then
+                  echo "Docker workflow succeeded: $docker_url"
+                  break
+                fi
+                echo "::error::Docker workflow completed with conclusion '${docker_conclusion:-unknown}': $docker_url"
+                exit 1
+              fi
+
+              echo "Docker workflow is ${docker_status:-unknown}: $docker_url"
+            else
+              echo "Docker workflow run for ${release_tag} was not found yet."
+            fi
+
+            if (( SECONDS >= deadline )); then
+              echo "::error::Timed out waiting for docker workflow for ${release_tag}"
+              exit 1
+            fi
+            sleep 30
+          done
+
+          format_commit_changelog() {
+            git log --first-parent --format='%h%x1f%s%x1f%b%x1e' "$@" |
+              while IFS= read -r -d $'\x1e' record; do
+                while [[ "$record" == $'\n'* ]]; do
+                  record="${record#$'\n'}"
+                done
+                separator=$'\x1f'
+                short_hash="${record%%"$separator"*}"
+                remainder="${record#*"$separator"}"
+                subject="${remainder%%"$separator"*}"
+                body="${remainder#*"$separator"}"
+                entry="$subject"
+
+                if [[ "$subject" =~ ^Merge[[:space:]]pull[[:space:]]request[[:space:]]#([0-9]+)[[:space:]]from[[:space:]] ]]; then
+                  pr_number="${BASH_REMATCH[1]}"
+                  pr_title="$(sed -n '/[^[:space:]]/{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' <<<"$body")"
+                  if [[ -n "$pr_title" ]]; then
+                    entry="${pr_title} (#${pr_number})"
+                  fi
+                fi
+
+                printf -- '- %s (%s)\n' "$entry" "$short_hash"
+              done
+          }
 
           previous_tag="$(git describe --tags --match 'v[0-9]*' --abbrev=0 "${current_ref}^" 2>/dev/null || true)"
           if [[ -n "$previous_tag" ]]; then
             changelog_range="${previous_tag}..${release_tag}"
             changelog_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${previous_tag}...${release_tag}"
-            commit_changelog="$(git log --first-parent --no-merges --pretty=format:'- %s (%h)' "${previous_tag}..${current_ref}")"
+            commit_changelog="$(format_commit_changelog "${previous_tag}..${current_ref}")"
           else
             changelog_range="initial release..${release_tag}"
             changelog_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/tree/${release_tag}"
-            commit_changelog="$(git log --first-parent --no-merges --pretty=format:'- %s (%h)' "$current_ref")"
+            commit_changelog="$(format_commit_changelog "$current_ref")"
           fi
           if [[ -z "$commit_changelog" ]]; then
             commit_changelog="- ${release_tag}"
           fi
 
           release_name="$release_tag"
+          release_page_url=""
           release_notes=""
           if release_json="$(gh api \
             --header 'Accept: application/vnd.github+json' \
@@ -116,6 +193,7 @@ jobs:
           then
             release_tag="$(jq -er '.tag_name' <<<"$release_json")"
             release_name="$(jq -er '.name // .tag_name' <<<"$release_json")"
+            release_page_url="$(jq -er '.html_url' <<<"$release_json")"
             release_notes="$(jq -r '.body // ""' <<<"$release_json")"
           fi
 
@@ -170,7 +248,12 @@ jobs:
             exit 1
           fi
 
-          release_page_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${release_tag}"
+          footer_link_label="查看变更"
+          footer_link_url="$changelog_url"
+          if [[ -n "$release_page_url" ]]; then
+            footer_link_label="查看 Release"
+            footer_link_url="$release_page_url"
+          fi
 
           {
             printf '## OctoBus %s 已发布\n\n' "$release_tag"
@@ -178,15 +261,16 @@ jobs:
             printf '**变更内容**\n\n%s\n\n' "$translated_body"
             printf '**其他**\n\n'
             printf '• 完整变更记录：%s\n\n' "$changelog_url"
-            printf '[查看 Release](%s)\n' "$release_page_url"
+            printf '[%s](%s)\n' "$footer_link_label" "$footer_link_url"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          dingtalk_text="$(printf '### OctoBus %s 已发布\n\n**版本**：%s\n\n**变更内容**\n\n%s\n\n**其他**\n\n• 完整变更记录：%s\n\n[查看 Release](%s)' \
+          dingtalk_text="$(printf '### OctoBus %s 已发布\n\n**版本**：%s\n\n**变更内容**\n\n%s\n\n**其他**\n\n• 完整变更记录：%s\n\n[%s](%s)' \
             "$release_tag" \
             "$release_tag" \
             "$translated_body" \
             "$changelog_url" \
-            "$release_page_url")"
+            "$footer_link_label" \
+            "$footer_link_url")"
 
           dingtalk_payload="$(jq -n \
             --arg title "OctoBus ${release_tag} 已发布" \
