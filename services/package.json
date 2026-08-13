@@ -66,7 +66,8 @@
     "tencent-bh": "bin/tencent-bh.js",
     "alibaba-sas": "bin/alibaba-sas.js",
     "misp": "bin/misp.js",
-    "opencti": "bin/opencti.js"
+    "opencti": "bin/opencti.js",
+    "zhizhangyi-mbs": "bin/zhizhangyi-mbs.js"
   },
   "files": [
     "bin/alibaba-cloud-simple-application-server-firewall.js",
@@ -130,6 +131,7 @@
     "bin/alibaba-sas.js",
     "bin/misp.js",
     "bin/opencti.js",
+    "bin/zhizhangyi-mbs.js",
     "bin/wangsu-label-ip.js",
     "alibaba-cloud__simple-application-server-firewall",
     "chaitin__cloudatlas",
@@ -192,6 +194,7 @@
     "alibaba__sas",
     "misp__misp",
     "filigran__opencti",
+    "zhizhangyi__mbs",
     "wangsu__label-ip",
     "scripts",
     "bin/octobus-tentacles.js"

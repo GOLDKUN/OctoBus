@@ -249,6 +249,7 @@ const services = {
     entryFile: "../misp__misp/bin/misp.js",
     serviceModule: "../misp__misp/src/service.js",
   },
+  "zhizhangyi-mbs": { entryFile: "../zhizhangyi__mbs/bin/zhizhangyi-mbs.js", serviceModule: "../zhizhangyi__mbs/src/service.js" },
   "opencti": {
     entryFile: "../filigran__opencti/bin/opencti.js",
     serviceModule: "../filigran__opencti/src/service.js",
