@@ -249,6 +249,7 @@ const services = {
     entryFile: "../misp__misp/bin/misp.js",
     serviceModule: "../misp__misp/src/service.js",
   },
+  "qianxin-caasm": { entryFile: "../qianxin__caasm_v1/bin/qianxin-caasm.js", serviceModule: "../qianxin__caasm_v1/src/service.js" },
   "opencti": {
     entryFile: "../filigran__opencti/bin/opencti.js",
     serviceModule: "../filigran__opencti/src/service.js",
