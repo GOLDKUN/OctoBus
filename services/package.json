@@ -42,9 +42,12 @@
     "topsec-fw-2u": "bin/topsec-fw-2u.js",
     "venus-ads-v3-6": "bin/venus-ads-v3-6.js",
     "wangsu-label-ip": "bin/wangsu-label-ip.js",
-    "wd-k01": "bin/wd-k01.js"
+    "wd-k01": "bin/wd-k01.js",
+    "nsfocus-waf-v6-0-7": "bin/nsfocus-waf-v6-0-7.js"
   },
   "files": [
+    "nsfocus__waf_v6-0-7",
+    "bin/nsfocus-waf-v6-0-7.js",
     "bin/das-gateway-v3.js",
     "bin/das-tgfw-v6.js",
     "bin/dingtalk-group-robot.js",
