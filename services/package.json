@@ -66,9 +66,12 @@
     "tencent-bh": "bin/tencent-bh.js",
     "alibaba-sas": "bin/alibaba-sas.js",
     "misp": "bin/misp.js",
-    "opencti": "bin/opencti.js"
+    "opencti": "bin/opencti.js",
+    "geyecloud-atd": "bin/geyecloud-atd.js"
   },
   "files": [
+    "geyecloud__atd_v2-3-6",
+    "bin/geyecloud-atd.js",
     "bin/alibaba-cloud-simple-application-server-firewall.js",
     "bin/cloudatlas.js",
     "bin/das-gateway-v3.js",

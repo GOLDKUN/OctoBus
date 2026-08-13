@@ -249,6 +249,7 @@ const services = {
     entryFile: "../misp__misp/bin/misp.js",
     serviceModule: "../misp__misp/src/service.js",
   },
+  "geyecloud-atd": { entryFile: "../geyecloud__atd_v2-3-6/bin/geyecloud-atd.js", serviceModule: "../geyecloud__atd_v2-3-6/src/service.js" },
   "opencti": {
     entryFile: "../filigran__opencti/bin/opencti.js",
     serviceModule: "../filigran__opencti/src/service.js",
