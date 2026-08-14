@@ -660,7 +660,7 @@ function stringSample(name, schema, mockBaseURL, kind) {
   if (lower.includes("password")) {
     return "smoke-password";
   }
-  if (lower.includes("token") || lower.includes("secret") || lower.includes("key") || lower.includes("ak") || lower.includes("sk")) {
+  if (lower.includes("token") || lower.includes("secret") || lower.includes("key") || lower.includes("cookie") || lower.includes("ak") || lower.includes("sk")) {
     return "smoke-secret";
   }
   if (lower.includes("id")) {

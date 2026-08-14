@@ -2,9 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": true,
+  "required": ["restBaseUrl"],
   "properties": {
     "host": { "type": "string", "description": "NSFOCUS IDS/IPS console base URL with scheme, e.g. https://192.168.1.10." },
-    "restBaseUrl": { "type": "string", "description": "Alias for host." },
+    "restBaseUrl": { "type": "string", "format": "uri", "description": "Canonical NSFOCUS IDS console base URL with scheme." },
     "baseUrl": { "type": "string", "description": "Alias for host." },
     "timeoutMs": { "type": "integer", "minimum": 1, "default": 5000, "description": "HTTP timeout in milliseconds." },
     "skipTlsVerify": { "type": "boolean", "default": false, "description": "Skip TLS certificate verification for private deployments." },

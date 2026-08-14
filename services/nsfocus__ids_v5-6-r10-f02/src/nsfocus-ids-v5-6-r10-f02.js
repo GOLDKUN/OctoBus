@@ -76,7 +76,8 @@ const normalizeBaseUrl = (value) => {
 const mergedBindings = (ctx = {}) => ({ ...(ctx.config ?? {}), ...(ctx.secret ?? {}), ...(ctx.bindings ?? {}) });
 const resolveCallContext = (ctx = {}) => ({ ...ctx, bindings: mergedBindings(ctx), limits: ctx.limits ?? {}, meta: ctx.meta ?? {}, req: ctx.request ?? ctx.req ?? {} });
 const requestFromContext = (ctx = {}) => ctx.request ?? ctx.req ?? {};
-const resolveHost = (bindings = {}) => normalizeBaseUrl(firstDefined(bindings.host, bindings.restBaseUrl, bindings.baseUrl));
+const resolveHost = (bindings = {}) => [bindings.host, bindings.restBaseUrl, bindings.baseUrl]
+  .map(normalizeBaseUrl).find(Boolean) ?? '';
 const resolveCookie = (bindings = {}) => pickStringFrom(bindings, ['cookie', 'sessionCookie', 'session_cookie']);
 const resolveTimeoutMs = (ctx = {}) => {
   const value = Number(firstDefined(ctx.limits?.timeoutMs, ctx.bindings?.timeoutMs, DEFAULT_TIMEOUT_MS));

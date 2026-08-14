@@ -144,6 +144,7 @@ test('helper coverage', () => {
   assert.equal(h.normalizeBaseUrl('https://user:password@h'), '');
   assert.equal(h.resolveCookie({ session_cookie: 'c' }), 'c');
   assert.equal(h.resolveCookie({ sessionCookie: 'c2' }), 'c2');
+  assert.equal(h.resolveHost({ host: 'missing-scheme', restBaseUrl: 'https://ids' }), 'https://ids');
   assert.equal(h.decodeEntities('a&amp;b&lt;c&gt;&quot;&#39;&nbsp;d'), 'a&b<c>"\' d');
   assert.equal(h.stripTags('<b> 1.2.3.4 </b>&nbsp;:80'), '1.2.3.4 :80');
   assert.deepEqual(h.attrTitles('<img title="低危险程度"><img title="允许">'), ['低危险程度', '允许']);
