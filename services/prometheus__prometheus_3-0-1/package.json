@@ -1,0 +1,13 @@
+{
+  "name": "prometheus-3-0-1",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "prometheus-3-0-1": "bin/prometheus-3-0-1.js"
+  },
+  "dependencies": {
+    "@chaitin-ai/octobus-sdk": "^0.6.0",
+    "undici": "^7.16.0"
+  }
+}
