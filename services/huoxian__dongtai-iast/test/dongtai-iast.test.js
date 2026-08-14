@@ -39,6 +39,9 @@ describe('Utility Functions', () => {
     assert.equal(normalizeBaseUrl('invalid'), null);
     assert.equal(normalizeBaseUrl(''), null);
     assert.equal(normalizeBaseUrl(null), null);
+    assert.equal(normalizeBaseUrl('ftp://dongtai.example.com'), null);
+    assert.equal(normalizeBaseUrl('https://token@dongtai.example.com'), null);
+    assert.equal(normalizeBaseUrl('https://dongtai.example.com/?next=elsewhere'), null);
   });
 
   it('toPositiveInt should parse numbers correctly', () => {
@@ -84,6 +87,9 @@ describe('Utility Functions', () => {
     assert.deepEqual(parseHeaders(''), {});
     assert.deepEqual(parseHeaders(null), {});
     assert.deepEqual(parseHeaders('{"X-Auth":"abc"}'), { 'X-Auth': 'abc' });
+    assert.deepEqual(parseHeaders('{bad json'), {});
+    assert.deepEqual(parseHeaders('[]'), {});
+    assert.deepEqual(parseHeaders(['not', 'headers']), {});
   });
 
   it('toValue should convert values correctly', () => {
@@ -92,6 +98,13 @@ describe('Utility Functions', () => {
     assert.deepEqual(toValue(true), { boolValue: true });
     assert.deepEqual(toValue(null), undefined);
     assert.deepEqual(toValue(undefined), undefined);
+    assert.deepEqual(toValue(['one', null, 2]), {
+      listValue: { values: [{ stringValue: 'one' }, { numberValue: 2 }] },
+    });
+    assert.deepEqual(toValue({ nested: null, enabled: false }), {
+      structValue: { fields: { nested: { nullValue: 'NULL_VALUE' }, enabled: { boolValue: false } } },
+    });
+    assert.deepEqual(toValue(Symbol.for('value')), { stringValue: 'Symbol(value)' });
   });
 
   it('toStruct should convert objects to struct format', () => {
@@ -99,6 +112,7 @@ describe('Utility Functions', () => {
     assert.ok(result.fields);
     assert.equal(result.fields.name.stringValue, 'test');
     assert.equal(result.fields.count.numberValue, 5);
+    assert.deepEqual(toStruct(null), { fields: {} });
   });
 
   it('errorWithCode should create GrpcError with correct code', () => {
@@ -490,6 +504,88 @@ describe('Error Handling', () => {
       console.error = originalError;
     }
     assert.equal(logs.some((entry) => entry.includes(secret)), false);
+  });
+
+  it('maps other upstream and malformed response failures without leaking response data', async () => {
+    globalThis.fetch = mock.fn(async () => ({
+      ok: false, status: 429, headers: { get: () => 'text/plain' }, text: async () => 'rate-limit-secret',
+    }));
+    await assert.rejects(
+      () => handlers[METHOD_LIST_VULNS_FULL](makeCtx()),
+      (err) => err.message.includes('FAILED_PRECONDITION') && !err.message.includes('rate-limit-secret'),
+    );
+
+    globalThis.fetch = mock.fn(async () => ({
+      ok: true, status: 200, headers: { get: () => 'application/json' }, text: async () => '{not-json',
+    }));
+    await assert.rejects(
+      () => handlers[METHOD_LIST_VULNS_FULL](makeCtx()),
+      (err) => err.message.includes('UNKNOWN') && err.message.includes('valid JSON'),
+    );
+  });
+
+  it('accepts a streamed response and rejects bounded response overflows', async () => {
+    globalThis.fetch = mock.fn(async () => new Response(JSON.stringify({ status: 201, data: [], page: {} }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    }));
+    assert.deepEqual((await handlers[METHOD_LIST_VULNS_FULL](makeCtx())).vulns, []);
+
+    globalThis.fetch = mock.fn(async () => ({
+      ok: true, status: 200, headers: { get: (name) => name === 'content-length' ? '1048577' : null },
+      text: async () => '{}',
+    }));
+    await assert.rejects(
+      () => handlers[METHOD_LIST_VULNS_FULL](makeCtx()),
+      (err) => err.message.includes('RESOURCE_EXHAUSTED'),
+    );
+
+    globalThis.fetch = mock.fn(async () => ({
+      ok: true, status: 200, headers: { get: () => null },
+      text: async () => 'x'.repeat(1024 * 1024 + 1),
+    }));
+    await assert.rejects(
+      () => handlers[METHOD_LIST_VULNS_FULL](makeCtx()),
+      (err) => err.message.includes('RESOURCE_EXHAUSTED'),
+    );
+
+    globalThis.fetch = mock.fn(async () => ({
+      ok: true, status: 200, headers: { get: () => null },
+      body: new ReadableStream({
+        start(controller) { controller.enqueue(new Uint8Array(1024 * 1024 + 1)); },
+      }),
+    }));
+    await assert.rejects(
+      () => handlers[METHOD_LIST_VULNS_FULL](makeCtx()),
+      (err) => err.message.includes('RESOURCE_EXHAUSTED'),
+    );
+  });
+
+  it('maps sparse official-style envelopes for every RPC without throwing', async () => {
+    globalThis.fetch = mock.fn(async () => createMockResponse({ status: 201, data: [{}], page: {} }));
+    const calls = [
+      [METHOD_LIST_VULNS_FULL, {}], [METHOD_GET_VULN_FULL, { id: 1 }],
+      [METHOD_UPDATE_VULN_STATUS_FULL, { id: 1, status: 'confirmed' }], [METHOD_GET_VULN_SUMMARY_FULL, {}],
+      [METHOD_LIST_PROJECTS_FULL, {}], [METHOD_GET_PROJECT_FULL, { id: 1 }],
+      [METHOD_CREATE_PROJECT_FULL, { name: 'sparse' }], [METHOD_DELETE_PROJECT_FULL, { id: 1 }],
+      [METHOD_LIST_AGENTS_FULL, {}], [METHOD_GET_SYSTEM_INFO_FULL, {}], [METHOD_LIST_STRATEGIES_FULL, {}],
+      [METHOD_GET_SCA_DETAIL_FULL, { id: 1 }],
+    ];
+    for (const [method, request] of calls) {
+      await handlers[method](makeCtx(request));
+    }
+    assert.equal(globalThis.fetch.mock.callCount(), calls.length);
+  });
+
+  it('rejects CRLF token injection and clamps an excessive timeout', async () => {
+    await assert.rejects(
+      () => handlers[METHOD_LIST_VULNS_FULL]({ config: { endpoint: MOCK_BASE_URL }, secret: { apiToken: 'a\r\nb' }, req: {} }),
+      (err) => err.message.includes('INVALID_ARGUMENT') && err.message.includes('line breaks'),
+    );
+    globalThis.fetch = mock.fn(async (_url, init) => createMockResponse({ status: 201, data: [], page: {} }));
+    await handlers[METHOD_LIST_VULNS_FULL]({
+      config: { endpoint: MOCK_BASE_URL, timeoutMs: 999999999 }, secret: { apiToken: MOCK_TOKEN }, req: {},
+    });
+    assert.ok(globalThis.fetch.mock.calls[0].arguments[1].signal);
   });
 
   it('accepts the SDK single-context ABI with ctx.request', async () => {
