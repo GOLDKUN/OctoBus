@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "waf_base_url": {
+      "type": "string",
+      "description": "WAF management base URL, e.g. https://<waf-ip>:8443"
+    },
+    "tls_verify": {
+      "type": "boolean",
+      "description": "Verify the WAF TLS certificate. Disable only for a trusted self-signed appliance certificate.",
+      "default": true
+    }
+  },
+  "required": ["waf_base_url"]
+}
