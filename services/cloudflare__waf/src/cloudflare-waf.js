@@ -277,15 +277,29 @@ export function rpcdef(ctx) {
       throw errorWithCode('UNAVAILABLE', reason);
     }
 
-    const text = await readResponseText(res, maxResponseBytes);
+    let text;
+    try {
+      text = await readResponseText(res, maxResponseBytes);
+    } catch (e) {
+      if (e?.legacyCode) throw e;
+      if (isTimeoutError(e)) {
+        throw errorWithCode('DEADLINE_EXCEEDED', `upstream request timed out after ${timeoutMs}ms`);
+      }
+      throw errorWithCode('UNAVAILABLE', redact(e?.cause?.message || e?.message || 'response read failed', [apiToken, authKey]));
+    }
     if (!res.ok) {
+      const upstreamError = (code) => {
+        const err = errorWithCode(code, `upstream http ${res.status}`);
+        err.httpStatus = res.status;
+        return err;
+      };
       if (res.status === 401 || res.status === 403) {
-        throw errorWithCode('PERMISSION_DENIED', `upstream http ${res.status}`);
+        throw upstreamError('PERMISSION_DENIED');
       }
       if (res.status >= 400 && res.status < 500) {
-        throw errorWithCode('FAILED_PRECONDITION', `upstream http ${res.status}`);
+        throw upstreamError('FAILED_PRECONDITION');
       }
-      throw errorWithCode('UNAVAILABLE', `upstream http ${res.status}`);
+      throw upstreamError('UNAVAILABLE');
     }
 
     if (!text.trim()) return { success: true, result: null, result_info: {} };
@@ -381,10 +395,15 @@ export function rpcdef(ctx) {
       for (const rule of matches) {
         const id = String(rule?.id ?? '');
         if (!id) continue;
-        await callCloudflare(`${scopeInfo.base}/${encodeURIComponent(id)}`, {
-          method: 'DELETE',
-          headers: buildHeaders(),
-        });
+        try {
+          await callCloudflare(`${scopeInfo.base}/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: buildHeaders(),
+          });
+        } catch (e) {
+          if (e?.httpStatus === 404) continue;
+          throw e;
+        }
         deletedIds.push(id);
       }
     }

@@ -25,6 +25,7 @@ const setFetch = (impl) => {
       if (out.errorName) e.name = out.errorName;
       throw e;
     }
+    if (out?.response) return out.response;
     const status = out?.status ?? 200;
     const text = out?.raw !== undefined ? out.raw : JSON.stringify(out?.body ?? {});
     return {
@@ -212,6 +213,18 @@ test('UnblockIP mode filter narrows deletions', async () => {
   assert.deepEqual(out.deleted_ids, ['kill']);
 });
 
+test('UnblockIP treats a concurrent DELETE 404 as already unblocked', async () => {
+  setFetch((url, init) => {
+    if (init.method === 'GET') return cfOk([rule('gone', '7.7.7.7')]);
+    if (init.method === 'DELETE') return { status: 404, body: { success: false, errors: [{ code: 7003 }] } };
+    return cfOk(null);
+  });
+  const handler = (await loadRpc({ targets: ['7.7.7.7'] }))[unblockPath];
+  const out = await handler();
+  assert.deepEqual(out.deleted_ids, []);
+  assert.equal(out.deleted_count, 0);
+});
+
 test('ListAccessRules maps rules, total_count, and pagination query', async () => {
   let seenUrl = '';
   setFetch((url, init) => {
@@ -397,6 +410,15 @@ test('transport enforces timeout, disables redirects, redacts credentials, and b
   );
   assert.equal(cancelled, true);
   assert.equal(_test.redact('apiToken=tok-123', ['tok-123']), 'apiToken=[REDACTED]');
+
+  setFetch(() => ({ response: {
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    body: { getReader: () => ({ read: async () => { const e = new Error('body timed out'); e.name = 'TimeoutError'; throw e; } }) },
+  } }));
+  handler = (await loadRpc({ value: '1.1.1.1' }))[listPath];
+  await assert.rejects(handler(), /DEADLINE_EXCEEDED.*10000ms/);
 });
 
 test('SetSecurityLevel avoids a PATCH when the requested level already matches', async () => {
