@@ -29,6 +29,7 @@ export function createMockServer({ expectedUser = DEFAULT_USER, expectedPassword
     const rawBody = await bufferBody(req);
     const fullUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     const path = fullUrl.pathname;
+    const routePath = path.replace(/^\/s\/[^/]+(?=\/)/, '');
     const entry = {
       method: req.method, path,
       query: Object.fromEntries(fullUrl.searchParams),
@@ -42,7 +43,7 @@ export function createMockServer({ expectedUser = DEFAULT_USER, expectedPassword
     if (expectedUser && auth.user !== expectedUser) { sendJson(res, 403, { statusCode: 403, error: 'Forbidden' }); return; }
     if (expectedPassword && auth.password !== expectedPassword) { sendJson(res, 403, { statusCode: 403, error: 'Forbidden' }); return; }
 
-    if (req.method === 'GET' && path === '/api/status') {
+    if (req.method === 'GET' && routePath === '/api/status') {
       sendJson(res, 200, {
         name: 'mock-kibana', uuid: 'kibana-uuid-001',
         version: { number: '7.10.0', build_hash: 'abc123', build_number: 1 },
@@ -51,12 +52,12 @@ export function createMockServer({ expectedUser = DEFAULT_USER, expectedPassword
       return;
     }
 
-    if (req.method === 'GET' && path === '/api/spaces/space') {
+    if (req.method === 'GET' && routePath === '/api/spaces/space') {
       sendJson(res, 200, [{ id: 'default', name: 'Default', description: 'Default space', color: '#00bfb3', disabledFeatures: [], initials: 'D' }, { id: 'custom', name: 'Custom Space', description: 'Custom', color: '#36a2ef', disabledFeatures: [], initials: 'CS' }]);
       return;
     }
 
-    const spaceMatch = path.match(/^\/api\/spaces\/space\/(.+)$/);
+    const spaceMatch = routePath.match(/^\/api\/spaces\/space\/(.+)$/);
     if (spaceMatch) {
       const spaceId = decodeURIComponent(spaceMatch[1]);
       if (spaceId === 'missing') { sendJson(res, 404, { statusCode: 404, error: 'Not Found' }); return; }
@@ -64,12 +65,12 @@ export function createMockServer({ expectedUser = DEFAULT_USER, expectedPassword
       return;
     }
 
-    if (req.method === 'GET' && path === '/api/saved_objects/_find') {
+    if (req.method === 'GET' && routePath === '/api/saved_objects/_find') {
       sendJson(res, 200, { total: 2, page: 1, per_page: 20, saved_objects: [{ id: 'obj-1', type: 'index-pattern', updated_at: '2026-01-01T00:00:00.000Z', version: 1, references: [] }, { id: 'obj-2', type: 'dashboard', updated_at: '2026-01-02T00:00:00.000Z', version: 2, references: [{ name: 'ref1', type: 'index-pattern', id: 'obj-1' }] }] });
       return;
     }
 
-    if (req.method === 'POST' && path === '/api/saved_objects/_bulk_get') {
+    if (req.method === 'POST' && routePath === '/api/saved_objects/_bulk_get') {
       const parsed = entry.body;
       const items = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.objects) ? parsed.objects : []);
       const results = items.map((item) => ({ id: item?.id || 'unknown', type: item?.type || 'unknown', version: 1, updated_at: '2026-01-01T00:00:00.000Z', attributes: { title: 'Test' }, references: [], migrationVersion: {}, coreMigrationVersion: '7.10.0' }));
@@ -77,15 +78,15 @@ export function createMockServer({ expectedUser = DEFAULT_USER, expectedPassword
       return;
     }
 
-    if (req.method === 'GET' && path.match(/^\/api\/saved_objects\/[^/]+\/[^/]+$/)) {
-      const parts = path.split('/');
+    if (req.method === 'GET' && routePath.match(/^\/api\/saved_objects\/[^/]+\/[^/]+$/)) {
+      const parts = routePath.split('/');
       const type = decodeURIComponent(parts[3]);
       const id = decodeURIComponent(parts[4]);
       sendJson(res, 200, { id, type, version: 1, updated_at: '2026-01-01T00:00:00.000Z', attributes: { title: 'Test Object', description: 'Mock' }, references: [], migrationVersion: { dashboard: '7.10.0' }, coreMigrationVersion: '7.10.0' });
       return;
     }
 
-    if (req.method === 'POST' && path === '/api/saved_objects/_export') {
+    if (req.method === 'POST' && routePath === '/api/saved_objects/_export') {
       const ndjson = '{"id":"obj-1","type":"index-pattern","attributes":{"title":"test-*"}}\n{"exportedCount":1,"missingRefCount":0}\n';
       res.writeHead(200, { 'content-type': 'application/ndjson', 'content-length': Buffer.byteLength(ndjson) });
       res.end(ndjson);

@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer';
+
 import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
 
 export const METHOD_GET_STATUS_FULL = 'Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetStatus';
@@ -10,11 +12,17 @@ export const METHOD_EXPORT_SAVED_OBJECTS_FULL = 'Elastic_Kibana_7_10_0.Elastic_K
 
 export const DEFAULT_TIMEOUT_MS = 5000;
 export const DEFAULT_PER_PAGE = 20;
+export const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+export const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+
+let insecureDispatcherPromise;
 
 const grpcCodeFor = (code) => ({
   FAILED_PRECONDITION: grpcStatus.FAILED_PRECONDITION,
   INVALID_ARGUMENT: grpcStatus.INVALID_ARGUMENT,
+  DEADLINE_EXCEEDED: grpcStatus.DEADLINE_EXCEEDED,
   PERMISSION_DENIED: grpcStatus.PERMISSION_DENIED,
+  RESOURCE_EXHAUSTED: grpcStatus.RESOURCE_EXHAUSTED,
   UNAVAILABLE: grpcStatus.UNAVAILABLE,
   UNKNOWN: grpcStatus.UNKNOWN,
 })[code] ?? grpcStatus.UNKNOWN;
@@ -67,8 +75,13 @@ const toJsonString = (value) => {
 
 const normalizeBaseUrl = (value) => {
   const raw = toTrimmedString(value);
-  if (!/^https?:\/\//i.test(raw)) return '';
-  return raw.replace(/\/+$/, '');
+  try {
+    const parsed = new URL(raw);
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) return '';
+    return raw.replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
 };
 
 const mergedBindings = (ctx = {}) => ({
@@ -109,10 +122,29 @@ const resolveTimeoutMs = (ctx = {}) => {
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
 };
 
-const buildTlsOptions = (bindings = {}) => {
-  const enabled = Boolean(bindings.skipTlsVerify || bindings.tlsInsecureSkipVerify || bindings.insecureSkipVerify);
-  if (!enabled) return {};
-  return { skipTlsVerify: true, tlsInsecureSkipVerify: true, insecureSkipVerify: true };
+const resolveMaxResponseBytes = (ctx = {}) => {
+  const raw = Number(firstDefined(ctx.limits?.maxResponseBytes, ctx.bindings?.maxResponseBytes, DEFAULT_MAX_RESPONSE_BYTES));
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_MAX_RESPONSE_BYTES;
+  return Math.min(Math.trunc(raw), MAX_RESPONSE_BYTES);
+};
+
+const shouldSkipTlsVerify = (bindings = {}) => toBool(firstDefined(
+  bindings.skipTlsVerify,
+  bindings.tlsInsecureSkipVerify,
+  bindings.insecureSkipVerify,
+), false);
+
+const createTlsDispatcher = async (skipTlsVerify) => {
+  if (!skipTlsVerify) return undefined;
+  insecureDispatcherPromise ??= import('undici').then(({ Agent }) => new Agent({
+    connect: { rejectUnauthorized: false },
+  }));
+  return insecureDispatcherPromise;
+};
+
+const buildTlsOptions = async (bindings = {}) => {
+  const dispatcher = await createTlsDispatcher(shouldSkipTlsVerify(bindings));
+  return dispatcher ? { dispatcher } : {};
 };
 
 const requireBaseUrl = (ctx = {}) => {
@@ -164,9 +196,23 @@ const buildLogPrefix = (ctx = {}, action) => {
   return `[Elastic_Kibana_7_10_0][${action}]${trace.length ? `[${trace.join(' ')}]` : ''}`;
 };
 
+const redactUrl = (value) => {
+  try {
+    const url = new URL(String(value));
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return '<invalid-url>';
+  }
+};
+
 const logFlow = (ctx, action, details) => {
   const prefix = buildLogPrefix(ctx, action);
-  try { console.log(prefix, JSON.stringify(details)); } catch { console.log(prefix, details); }
+  const safeDetails = { ...details, ...(details?.url ? { url: redactUrl(details.url) } : {}) };
+  try { console.log(prefix, JSON.stringify(safeDetails)); } catch { console.log(prefix, safeDetails); }
 };
 
 const attachResponse = (err, response) => { err.response = response; return err; };
@@ -181,46 +227,74 @@ const mapHttpStatusToCode = (httpStatus) => {
   return 'UNAVAILABLE';
 };
 
+const readResponseBody = async (res, maxResponseBytes) => {
+  const declaredLength = Number(res.headers?.get?.('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxResponseBytes) {
+    throw errorWithCode('RESOURCE_EXHAUSTED', `upstream response exceeds ${maxResponseBytes} bytes`);
+  }
+  if (!res.body || typeof res.body.getReader !== 'function') {
+    const text = String(await res.text());
+    if (Buffer.byteLength(text) > maxResponseBytes) throw errorWithCode('RESOURCE_EXHAUSTED', `upstream response exceeds ${maxResponseBytes} bytes`);
+    return text;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let size = 0;
+  let text = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxResponseBytes) {
+        await reader.cancel();
+        throw errorWithCode('RESOURCE_EXHAUSTED', `upstream response exceeds ${maxResponseBytes} bytes`);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+};
+
 const executeRequest = async (url, ctx = {}, options = {}) => {
   const bindings = ctx.bindings || {};
   const timeoutMs = resolveTimeoutMs(ctx);
+  const maxResponseBytes = resolveMaxResponseBytes(ctx);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   const headers = { Accept: 'application/json', 'kbn-xsrf': 'octobus', ...(options.headers ?? {}) };
-  const init = {
-    method: options.method || 'GET',
-    headers,
-    signal: controller.signal,
-    ...buildTlsOptions(bindings),
-    ...(options.body !== undefined ? { body: options.body } : {}),
-  };
-  let res;
   try {
-    res = await fetch(url, init);
+    const tlsOptions = await buildTlsOptions(bindings);
+    const res = await fetch(url, {
+      method: options.method || 'GET',
+      headers,
+      signal: controller.signal,
+      redirect: 'error',
+      ...tlsOptions,
+      ...(options.body !== undefined ? { body: options.body } : {}),
+    });
+    const rawBody = await readResponseBody(res, maxResponseBytes);
+    const httpStatus = Number(res.status || 0);
+    logFlow(ctx, 'fetch:response', { url, httpStatus, bodyLength: Buffer.byteLength(rawBody) });
+    return { httpStatus, httpBody: rawBody };
   } catch (err) {
-    const errMsg = err?.cause?.message || err?.message || 'fetch failed';
-    logFlow(ctx, options.action || 'fetch:error', { url, error: errMsg });
-    throw attachResponse(errorWithCode('UNAVAILABLE', `${options.action || 'fetch'} failed: ${errMsg}`), { http_status: 0, http_body: errMsg });
+    const code = err?.legacyCode || (timedOut || err?.name === 'AbortError' || err?.name === 'TimeoutError' ? 'DEADLINE_EXCEEDED' : 'UNAVAILABLE');
+    const message = code === 'DEADLINE_EXCEEDED' ? `${options.action || 'fetch'} timed out` : `${options.action || 'fetch'} failed`;
+    logFlow(ctx, options.action || 'fetch:error', { url, code, errorName: err?.name || 'Error' });
+    throw attachResponse(errorWithCode(code, message), { http_status: 0, http_body: '' });
   } finally {
     clearTimeout(timer);
   }
-  let rawBody;
-  try { rawBody = await res.text(); }
-  catch (err) {
-    const errMsg = err?.message || 'response read failed';
-    logFlow(ctx, 'fetch:read-error', { url, httpStatus: res.status, error: errMsg });
-    throw attachResponse(errorWithCode('UNAVAILABLE', `response read failed: ${errMsg}`), { http_status: Number(res.status || 0), http_body: errMsg });
-  }
-  const httpStatus = Number(res.status || 0);
-  logFlow(ctx, 'fetch:response', { url, httpStatus, bodyLength: rawBody?.length || 0 });
-  return { httpStatus, httpBody: String(rawBody ?? '') };
 };
 
 const ensureSuccess = (result, action) => {
   const { httpStatus, httpBody } = result;
   if (httpStatus >= 200 && httpStatus < 300) return;
   const code = mapHttpStatusToCode(httpStatus);
-  throw attachResponse(errorWithCode(code, `${action} upstream http ${httpStatus}: ${httpBody.substring(0, 500)}`), { http_status: httpStatus, http_body: httpBody });
+  throw attachResponse(errorWithCode(code, `${action} upstream http ${httpStatus}`), { http_status: httpStatus, http_body: '' });
 };
 
 const parseJsonOrThrowUnknown = (result, action) => {
@@ -237,12 +311,7 @@ const parseJsonOrThrowUnknown = (result, action) => {
 
 const buildHeaders = (ctx) => {
   const { username, password } = requireCredentials(ctx);
-  const headers = { Authorization: buildBasicAuth(username, password), 'kbn-xsrf': 'octobus' };
-  const space = toTrimmedString(ctx.req?.space);
-  if (space && space !== 'default') {
-    headers['kbn-space'] = space;
-  }
-  return headers;
+  return { Authorization: buildBasicAuth(username, password), 'kbn-xsrf': 'octobus' };
 };
 
 const handleGetStatus = async (req = {}, ctx = {}) => {
@@ -400,10 +469,10 @@ const handleBulkGetSavedObjects = async (req = {}, ctx = {}) => {
   const baseUrl = requireBaseUrl(callCtx);
   const objects = Array.isArray(req.objects) ? req.objects : [];
   if (objects.length === 0) throw errorWithCode('INVALID_ARGUMENT', 'at least one object is required');
-  const body = objects.map((o) => ({ type: toTrimmedString(o?.type || o), id: toTrimmedString(o?.id || o) }));
+  const body = { objects: objects.map((o) => ({ type: toTrimmedString(o?.type), id: toTrimmedString(o?.id) })) };
   const space = toTrimmedString(req.space);
   const url = buildUrl(baseUrl, '/api/saved_objects/_bulk_get', {}, space);
-  logFlow(callCtx, 'BulkGetSavedObjects', { url: joinPath(baseUrl, '/api/saved_objects/_bulk_get'), count: body.length });
+  logFlow(callCtx, 'BulkGetSavedObjects', { url, count: body.objects.length });
   const headers = { ...buildHeaders(callCtx), 'Content-Type': 'application/json' };
   const result = await executeRequest(url, callCtx, { method: 'POST', headers, body: JSON.stringify(body), action: 'BulkGetSavedObjects' });
   ensureSuccess(result, 'BulkGetSavedObjects');
@@ -475,14 +544,27 @@ const handleExportSavedObjects = async (req = {}, ctx = {}) => {
   };
 };
 
+const isRuntimeContext = (value) => value && typeof value === 'object' && (
+  Object.prototype.hasOwnProperty.call(value, 'config')
+  || Object.prototype.hasOwnProperty.call(value, 'secret')
+  || Object.prototype.hasOwnProperty.call(value, 'bindings')
+  || Object.prototype.hasOwnProperty.call(value, 'request')
+  || Object.prototype.hasOwnProperty.call(value, 'req')
+);
+
+const adaptHandler = (handler) => (arg1 = {}, arg2 = undefined) => {
+  if (arg2 === undefined && isRuntimeContext(arg1)) return handler(arg1.request ?? arg1.req ?? {}, arg1);
+  return handler(arg1, arg2 ?? {});
+};
+
 export const handlers = {
-  [METHOD_GET_STATUS_FULL]: handleGetStatus,
-  [METHOD_LIST_SPACES_FULL]: handleListSpaces,
-  [METHOD_GET_SPACE_FULL]: handleGetSpace,
-  [METHOD_FIND_SAVED_OBJECTS_FULL]: handleFindSavedObjects,
-  [METHOD_GET_SAVED_OBJECT_FULL]: handleGetSavedObject,
-  [METHOD_BULK_GET_SAVED_OBJECTS_FULL]: handleBulkGetSavedObjects,
-  [METHOD_EXPORT_SAVED_OBJECTS_FULL]: handleExportSavedObjects,
+  [METHOD_GET_STATUS_FULL]: adaptHandler(handleGetStatus),
+  [METHOD_LIST_SPACES_FULL]: adaptHandler(handleListSpaces),
+  [METHOD_GET_SPACE_FULL]: adaptHandler(handleGetSpace),
+  [METHOD_FIND_SAVED_OBJECTS_FULL]: adaptHandler(handleFindSavedObjects),
+  [METHOD_GET_SAVED_OBJECT_FULL]: adaptHandler(handleGetSavedObject),
+  [METHOD_BULK_GET_SAVED_OBJECTS_FULL]: adaptHandler(handleBulkGetSavedObjects),
+  [METHOD_EXPORT_SAVED_OBJECTS_FULL]: adaptHandler(handleExportSavedObjects),
 };
 
 export const rpcdef = (ctx) => ({
@@ -506,6 +588,16 @@ export const _test = {
   toJsonString,
   errorWithCode,
   buildHeaders,
+  buildTlsOptions,
+  createTlsDispatcher,
+  executeRequest,
+  isRuntimeContext,
+  adaptHandler,
+  readResponseBody,
+  redactUrl,
+  resolveTimeoutMs,
+  resolveMaxResponseBytes,
+  shouldSkipTlsVerify,
   parseJsonOrThrowUnknown,
   ensureSuccess,
   tryParseJson,

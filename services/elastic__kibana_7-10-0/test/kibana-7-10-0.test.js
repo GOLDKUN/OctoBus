@@ -2,9 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { GrpcError } from '@chaitin-ai/octobus-sdk';
-import { handlers, _test } from '../src/kibana-7-10-0.js';
+import { handlers, _test, rpcdef } from '../src/kibana-7-10-0.js';
 import { service } from '../src/service.js';
 import { DEFAULT_PASSWORD, DEFAULT_USER, createMockServer } from './mock_upstream.js';
+
+const originalFetch = globalThis.fetch;
+
+test.afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
 
 const buildCtx = (overrides = {}) => ({
   config: { baseUrl: 'https://kibana.example.com:5601', timeoutMs: 4000, ...(overrides.config || {}) },
@@ -166,14 +172,164 @@ test('resolveUsername and resolvePassword with aliases', () => {
   assert.equal(_test.resolvePassword({ passwd: 'p3' }), 'p3');
 });
 
-test('buildHeaders with space', () => {
+test('buildHeaders authenticates without nonstandard space header', () => {
   const ctx = { bindings: { username: 'elastic', password: 'changeme' }, req: { space: 'custom' } };
   const headers = _test.buildHeaders({ bindings: mergedBindings(ctx), req: ctx.req });
-  assert.equal(headers['kbn-space'], 'custom');
+  assert.equal(headers.Authorization, `Basic ${Buffer.from('elastic:changeme').toString('base64')}`);
+  assert.equal(headers['kbn-space'], undefined);
 });
 
 test('tryParseJson failure and ensureSuccess error mapping', () => {
   assert.equal(_test.tryParseJson('not json').ok, false);
   try { _test.ensureSuccess({ httpStatus: 500, httpBody: 'error' }, 'Test'); assert.fail('expected error'); } catch (e) { assert.equal(e.legacyCode, 'UNAVAILABLE'); }
   try { _test.ensureSuccess({ httpStatus: 401, httpBody: 'denied' }, 'Test'); assert.fail('expected error'); } catch (e) { assert.equal(e.legacyCode, 'PERMISSION_DENIED'); }
+});
+
+test('BulkGetSavedObjects uses Kibana object envelope and a URL space prefix', async () => {
+  const mock = createMockServer();
+  const baseUrl = await mock.start();
+  try {
+    await handlers['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/BulkGetSavedObjects'](
+      { space: 'custom space', objects: [{ type: 'dashboard', id: 'obj-1' }] },
+      buildCtx({ config: { baseUrl } }),
+    );
+    assert.equal(mock.requests.at(-1).path, '/s/custom%20space/api/saved_objects/_bulk_get');
+    assert.deepEqual(mock.requests.at(-1).body, { objects: [{ type: 'dashboard', id: 'obj-1' }] });
+  } finally { await mock.close(); }
+});
+
+test('every RPC accepts the SDK single-context ABI', async () => {
+  const mock = createMockServer();
+  const baseUrl = await mock.start();
+  try {
+    const ctx = buildCtx({ config: { baseUrl } });
+    const cases = [
+      ['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetStatus', {}],
+      ['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/ListSpaces', {}],
+      ['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetSpace', { id: 'custom' }],
+      ['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/FindSavedObjects', { type: 'dashboard' }],
+      ['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetSavedObject', { type: 'dashboard', id: 'obj-1' }],
+      ['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/BulkGetSavedObjects', { objects: [{ type: 'dashboard', id: 'obj-1' }] }],
+      ['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/ExportSavedObjects', { type: 'dashboard' }],
+    ];
+    for (const [method, request] of cases) {
+      const result = await handlers[method]({ ...ctx, request });
+      assert.ok(result, method);
+    }
+  } finally { await mock.close(); }
+});
+
+test('transport uses AbortSignal, refuses redirects, and supports the Undici TLS dispatcher', async () => {
+  let captured;
+  globalThis.fetch = async (url, init) => {
+    captured = { url: String(url), init };
+    return new Response(JSON.stringify({ name: 'mock', version: { number: '7.10.0' }, statuses: [] }), { status: 200 });
+  };
+  await handlers['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetStatus']({}, buildCtx({ bindings: { skipTlsVerify: 'true' } }));
+  assert.ok(captured.init.signal instanceof AbortSignal);
+  assert.equal(captured.init.redirect, 'error');
+  assert.ok(captured.init.dispatcher, 'skipTlsVerify supplies an Undici dispatcher');
+  assert.equal(Object.hasOwn(captured.init, 'timeoutMs'), false);
+});
+
+test('timeout, oversized responses, and upstream error bodies do not leak secrets', async () => {
+  const secret = 'never-log-this-password';
+  globalThis.fetch = (_url, init) => new Promise((_resolve, reject) => {
+    init.signal.addEventListener('abort', () => reject(Object.assign(new Error(secret), { name: 'AbortError' })), { once: true });
+  });
+  await expectGrpcError(
+    () => handlers['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetStatus']({}, buildCtx({ limits: { timeoutMs: 5 } })),
+    'DEADLINE_EXCEEDED',
+  );
+
+  globalThis.fetch = async () => new Response('x'.repeat(32), { status: 200 });
+  await expectGrpcError(
+    () => handlers['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetStatus']({}, buildCtx({ limits: { maxResponseBytes: 16 } })),
+    'RESOURCE_EXHAUSTED',
+  );
+
+  globalThis.fetch = async () => new Response(`upstream says ${secret}`, { status: 500 });
+  try {
+    await handlers['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetStatus']({}, buildCtx());
+    assert.fail('expected rejection');
+  } catch (err) {
+    assert.equal(err.legacyCode, 'UNAVAILABLE');
+    assert.equal(err.message.includes(secret), false);
+    assert.equal(err.response.http_body, '');
+  }
+});
+
+test('base URLs with credentials, queries, or fragments are rejected and log URLs are redacted', async () => {
+  assert.equal(_test.resolveBaseUrl('https://user:pass@kibana.example:5601'), '');
+  assert.equal(_test.resolveBaseUrl('https://kibana.example:5601/?token=secret'), '');
+  assert.equal(_test.redactUrl('https://user:pass@kibana.example:5601/api/status?token=secret'), 'https://kibana.example:5601/api/status');
+  assert.equal(_test.redactUrl('not a URL'), '<invalid-url>');
+  assert.equal(_test.toBool('off'), false);
+  assert.equal(_test.toBool('yes'), true);
+  assert.equal(_test.toBool(0), false);
+  assert.equal(_test.toBool('unexpected', true), true);
+  assert.equal(_test.resolveTimeoutMs({ bindings: { timeoutMs: 0 } }), 5000);
+  assert.equal(_test.resolveMaxResponseBytes({ bindings: { maxResponseBytes: -1 } }), 4 * 1024 * 1024);
+  assert.equal(_test.resolveMaxResponseBytes({ bindings: { maxResponseBytes: 99 * 1024 * 1024 } }), 16 * 1024 * 1024);
+  assert.equal(_test.shouldSkipTlsVerify({ skipTlsVerify: 'false', insecureSkipVerify: true }), false);
+  assert.equal(_test.shouldSkipTlsVerify({ tlsInsecureSkipVerify: true }), true);
+  assert.equal(_test.shouldSkipTlsVerify({ insecureSkipVerify: 'on' }), true);
+  assert.deepEqual(await _test.buildTlsOptions({ skipTlsVerify: false }), {});
+  assert.equal(_test.isRuntimeContext({}), false);
+  assert.equal(_test.isRuntimeContext({ config: {} }), true);
+  assert.equal(_test.isRuntimeContext({ secret: {} }), true);
+  assert.equal(_test.isRuntimeContext({ bindings: {} }), true);
+  assert.equal(_test.isRuntimeContext({ request: {} }), true);
+  assert.equal(_test.isRuntimeContext({ req: {} }), true);
+  const circular = {}; circular.self = circular;
+  assert.equal(_test.toJsonString(circular), '');
+});
+
+test('JSON parse and body readers cover empty, malformed, declared, and fallback responses', async () => {
+  await expectGrpcError(
+    () => Promise.resolve().then(() => _test.parseJsonOrThrowUnknown({ httpStatus: 200, httpBody: '' }, 'Test')),
+    'UNKNOWN',
+  );
+  await expectGrpcError(
+    () => Promise.resolve().then(() => _test.parseJsonOrThrowUnknown({ httpStatus: 200, httpBody: '{' }, 'Test')),
+    'UNKNOWN',
+  );
+  await expectGrpcError(
+    () => _test.readResponseBody({ headers: new Headers({ 'content-length': '32' }), body: null, text: async () => 'ok' }, 16),
+    'RESOURCE_EXHAUSTED',
+  );
+  assert.equal(await _test.readResponseBody({ headers: new Headers(), body: null, text: async () => 'fallback' }, 16), 'fallback');
+  try { _test.ensureSuccess({ httpStatus: 404, httpBody: 'missing' }, 'Test'); assert.fail('expected error'); } catch (err) { assert.equal(err.legacyCode, 'FAILED_PRECONDITION'); }
+});
+
+test('saved-object references and export metadata map every response branch', async () => {
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('_export')) {
+      return new Response('{"id":"obj-1"}\nnot-json\n{"exportedCount":0,"missingReferences":[{"type":"dashboard","id":"missing"}]}\n', { status: 200 });
+    }
+    return new Response(JSON.stringify({
+      id: 'obj-1', type: 'dashboard', references: [{ name: 'ref', type: 'index-pattern', id: 'pattern-1' }],
+    }), { status: 200 });
+  };
+  const ctx = buildCtx();
+  const object = await handlers['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetSavedObject']({ type: 'dashboard', id: 'obj-1' }, ctx);
+  assert.deepEqual(object.references, [{ name: 'ref', type: 'index-pattern', id: 'pattern-1' }]);
+  const exported = await handlers['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/ExportSavedObjects']({ type: 'dashboard' }, ctx);
+  assert.equal(exported.exported_count, 0, 'explicit exportedCount=0 is not replaced with a line-count fallback');
+  assert.deepEqual(exported.missing_refs, ['dashboard:missing']);
+});
+
+test('legacy rpcdef exposes all seven deterministic routes', async () => {
+  const mock = createMockServer();
+  const baseUrl = await mock.start();
+  try {
+    const routes = rpcdef(buildCtx({ config: { baseUrl } }));
+    await routes['/Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetStatus']();
+    await routes['/Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/ListSpaces']();
+    await routes['/Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetSpace']({ id: 'custom' });
+    await routes['/Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/FindSavedObjects']({ type: 'dashboard' });
+    await routes['/Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetSavedObject']({ type: 'dashboard', id: 'obj-1' });
+    await routes['/Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/BulkGetSavedObjects']({ objects: [{ type: 'dashboard', id: 'obj-1' }] });
+    await routes['/Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/ExportSavedObjects']({ type: 'dashboard' });
+  } finally { await mock.close(); }
 });
