@@ -1,0 +1,12 @@
+{
+  "method": "TheHive_CORTEX.TheHive_CORTEX/ListAnalyzers",
+  "request": {},
+  "protocols": ["connect", "grpc", "mcp"],
+  "expectUpstream": true,
+  "requireUpstreamPerProtocol": true,
+  "requireBusinessSuccess": true,
+  "upstream": {
+    "method": "GET",
+    "path": "/api/analyzer"
+  }
+}
