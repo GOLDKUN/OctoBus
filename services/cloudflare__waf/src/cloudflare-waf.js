@@ -4,13 +4,23 @@
 // Bindings (secret): apiToken (Bearer) OR authEmail + authKey (legacy global key).
 
 import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
+import { Agent } from 'undici';
 
 const DEFAULT_ENDPOINT = 'https://api.cloudflare.com/client/v4';
 const DEFAULT_TIMEOUT_MS = 1500;
+const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MODE = 'block';
 const ACCESS_RULE_MODES = ['block', 'challenge', 'whitelist', 'js_challenge', 'managed_challenge'];
 const SECURITY_LEVELS = ['off', 'essentially_off', 'low', 'medium', 'high', 'under_attack'];
 const MAX_PER_PAGE = 1000;
+
+let insecureTlsDispatcher;
+
+const getInsecureTlsDispatcher = () => {
+  insecureTlsDispatcher ??= new Agent({ connect: { rejectUnauthorized: false } });
+  return insecureTlsDispatcher;
+};
 
 const PKG = 'Cloudflare_WAF.Cloudflare_WAF';
 const BLOCK_IP_PATH = `/${PKG}/BlockIP`;
@@ -23,6 +33,7 @@ const grpcCodeFor = (code) => ({
   INVALID_ARGUMENT: grpcStatus.INVALID_ARGUMENT,
   FAILED_PRECONDITION: grpcStatus.FAILED_PRECONDITION,
   PERMISSION_DENIED: grpcStatus.PERMISSION_DENIED,
+  RESOURCE_EXHAUSTED: grpcStatus.RESOURCE_EXHAUSTED,
   UNAUTHENTICATED: grpcStatus.UNAUTHENTICATED,
   UNAVAILABLE: grpcStatus.UNAVAILABLE,
   DEADLINE_EXCEEDED: grpcStatus.DEADLINE_EXCEEDED,
@@ -82,6 +93,52 @@ const toPositiveInt = (val) => {
   const n = Number(raw);
   if (!Number.isInteger(n) || Number.isNaN(n)) return null;
   return n;
+};
+
+const boundedPositiveInt = (value, fallback, maximum) => {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) return fallback;
+  return Math.min(parsed, maximum);
+};
+
+const isTimeoutError = (err) => err?.name === 'TimeoutError' || err?.name === 'AbortError';
+
+const redact = (value, secrets = []) => {
+  let text = String(value ?? '');
+  for (const secret of secrets) {
+    if (secret) text = text.replaceAll(secret, '[REDACTED]');
+  }
+  return text.replace(/(authorization|x-auth-key|api[_ -]?token)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]');
+};
+
+const readResponseText = async (response, maxResponseBytes) => {
+  const declaredLength = Number(response.headers?.get?.('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxResponseBytes) {
+    throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response exceeds the configured size limit');
+  }
+
+  if (response.body?.getReader) {
+    const reader = response.body.getReader();
+    const chunks = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxResponseBytes) {
+        await reader.cancel();
+        throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response exceeds the configured size limit');
+      }
+      chunks.push(value);
+    }
+    return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+  }
+
+  const text = String(await response.text());
+  if (Buffer.byteLength(text) > maxResponseBytes) {
+    throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response exceeds the configured size limit');
+  }
+  return text;
 };
 
 const requireTargets = (req, keys) => {
@@ -169,7 +226,12 @@ export function rpcdef(ctx) {
     || DEFAULT_ENDPOINT;
   const configZoneId = toOptionalString(bindings.zoneId || bindings.zone_id);
   const configAccountId = toOptionalString(bindings.accountId || bindings.account_id);
-  const timeoutMs = ctx.limits?.timeoutMs || Number(bindings.timeoutMs) || DEFAULT_TIMEOUT_MS;
+  const timeoutMs = boundedPositiveInt(ctx.limits?.timeoutMs ?? bindings.timeoutMs, DEFAULT_TIMEOUT_MS, 120_000);
+  const maxResponseBytes = boundedPositiveInt(
+    ctx.limits?.maxResponseBytes ?? bindings.maxResponseBytes ?? bindings.max_response_bytes,
+    DEFAULT_MAX_RESPONSE_BYTES,
+    MAX_RESPONSE_BYTES,
+  );
   const baseHeaders = parseHeaders(bindings.headers);
   const meta = ctx.meta || {};
   const skipTlsVerify = Boolean(
@@ -198,28 +260,32 @@ export function rpcdef(ctx) {
     ...extra,
   });
 
-  const tlsOptions = () => (skipTlsVerify
-    ? { insecureSkipVerify: true, tlsInsecureSkipVerify: true }
-    : {});
-
   const callCloudflare = async (url, init) => {
     let res;
     try {
-      res = await fetch(url, { ...init, timeoutMs, ...tlsOptions() });
+      res = await fetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(timeoutMs),
+        redirect: 'error',
+        ...(skipTlsVerify ? { dispatcher: getInsecureTlsDispatcher() } : {}),
+      });
     } catch (e) {
-      const reason = e?.cause?.message || e?.message || 'fetch failed';
+      if (isTimeoutError(e)) {
+        throw errorWithCode('DEADLINE_EXCEEDED', `upstream request timed out after ${timeoutMs}ms`);
+      }
+      const reason = redact(e?.cause?.message || e?.message || 'fetch failed', [apiToken, authKey]);
       throw errorWithCode('UNAVAILABLE', reason);
     }
 
-    const text = await res.text();
+    const text = await readResponseText(res, maxResponseBytes);
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) {
-        throw errorWithCode('PERMISSION_DENIED', `upstream http ${res.status}: ${text}`);
+        throw errorWithCode('PERMISSION_DENIED', `upstream http ${res.status}`);
       }
       if (res.status >= 400 && res.status < 500) {
-        throw errorWithCode('FAILED_PRECONDITION', `upstream http ${res.status}: ${text}`);
+        throw errorWithCode('FAILED_PRECONDITION', `upstream http ${res.status}`);
       }
-      throw errorWithCode('UNAVAILABLE', `upstream http ${res.status}: ${text}`);
+      throw errorWithCode('UNAVAILABLE', `upstream http ${res.status}`);
     }
 
     if (!text.trim()) return { success: true, result: null, result_info: {} };
@@ -232,7 +298,7 @@ export function rpcdef(ctx) {
     }
 
     if (json && json.success === false) {
-      const detail = Array.isArray(json.errors) ? JSON.stringify(json.errors) : 'cloudflare reported success=false';
+      const detail = Array.isArray(json.errors) ? redact(JSON.stringify(json.errors), [apiToken, authKey]) : 'cloudflare reported success=false';
       const authFailure = Array.isArray(json.errors)
         && json.errors.some((e) => Number(e?.code) === 9109 || Number(e?.code) === 10000);
       throw errorWithCode(authFailure ? 'PERMISSION_DENIED' : 'FAILED_PRECONDITION', detail);
@@ -381,6 +447,11 @@ export function rpcdef(ctx) {
       throw errorWithCode('INVALID_ARGUMENT', `value must be one of ${SECURITY_LEVELS.join(', ')}`);
     }
     const url = `${endpoint}/zones/${encodeURIComponent(zoneId)}/settings/security_level`;
+    const current = await callCloudflare(url, { method: 'GET', headers: buildHeaders() });
+    const currentValue = toOptionalString(current?.result?.value);
+    if (currentValue === value) {
+      return { value: currentValue, raw: toStructValue(current.result) };
+    }
     const json = await callCloudflare(url, {
       method: 'PATCH',
       headers: buildHeaders({ 'content-type': 'application/json' }),
@@ -464,12 +535,15 @@ export const _test = {
   normalizeBaseUrl,
   normalizeMode,
   parseHeaders,
+  readResponseText,
+  redact,
   registerHandlers,
   requireTargets,
   resolveCallContext,
   toOptionalString,
   toPositiveInt,
   toStructValue,
+  boundedPositiveInt,
   ACCESS_RULE_MODES,
   SECURITY_LEVELS,
 };

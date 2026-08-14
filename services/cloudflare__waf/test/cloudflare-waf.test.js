@@ -22,6 +22,7 @@ const setFetch = (impl) => {
     const out = await impl(url, init);
     if (out && out.throwNetwork) {
       const e = new Error(out.throwNetwork);
+      if (out.errorName) e.name = out.errorName;
       throw e;
     }
     const status = out?.status ?? 200;
@@ -29,6 +30,7 @@ const setFetch = (impl) => {
     return {
       ok: status >= 200 && status < 300,
       status,
+      headers: { get: (name) => out?.headers?.[String(name).toLowerCase()] ?? null },
       async text() { return text; },
     };
   };
@@ -334,7 +336,7 @@ test('error mapping: http 403, http 400, success:false, auth code, network, bad 
   assert.deepEqual(out.rules, []);
 });
 
-test('binding fallbacks: default endpoint, timeoutMs, tls-skip, config account scope, unknown meta', async () => {
+test('binding fallbacks: default endpoint, AbortSignal timeout, TLS dispatcher, config account scope, unknown meta', async () => {
   let seen;
   setFetch((url, init) => { seen = { url, init }; return cfOk([rule('z', '1.1.1.1')], { total_count: 1 }); });
   // invalid endpoint -> default; no limits.timeoutMs -> bindings.timeoutMs; skipTlsVerify true;
@@ -347,8 +349,12 @@ test('binding fallbacks: default endpoint, timeoutMs, tls-skip, config account s
   const out = await handler();
   assert.equal(out.rules[0].id, 'z');
   assert.match(seen.url, /^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/cfg-acct\//);
-  assert.equal(seen.init.timeoutMs, 2222);
-  assert.equal(seen.init.insecureSkipVerify, true);
+  assert.ok(seen.init.signal instanceof AbortSignal);
+  assert.equal(seen.init.redirect, 'error');
+  assert.ok(seen.init.dispatcher);
+  assert.equal(seen.init.timeoutMs, undefined);
+  assert.equal(seen.init.insecureSkipVerify, undefined);
+  assert.equal(seen.init.tlsInsecureSkipVerify, undefined);
   assert.equal(seen.init.headers['x-engine-instance'], 'unknown');
   assert.equal(seen.init.headers['x-request-id'], 'unknown');
 });
@@ -357,6 +363,53 @@ test('success:false with non-array errors maps to FAILED_PRECONDITION', async ()
   setFetch(() => ({ status: 200, body: { success: false, errors: null } }));
   const handler = (await loadRpc({ value: '1.1.1.1' }))[listPath];
   await assert.rejects(handler(), /FAILED_PRECONDITION.*success=false/);
+});
+
+test('transport enforces timeout, disables redirects, redacts credentials, and bounds response bodies', async () => {
+  setFetch(() => ({ throwNetwork: 'Timeout exceeded', errorName: 'TimeoutError' }));
+  let handler = (await loadRpc({ value: '1.1.1.1' }))[listPath];
+  await assert.rejects(handler(), /DEADLINE_EXCEEDED.*10000ms/);
+
+  setFetch(() => ({ throwNetwork: 'authorization: Bearer tok-123' }));
+  handler = (await loadRpc({ value: '1.1.1.1' }))[listPath];
+  await assert.rejects(handler(), (err) => {
+    assert.match(err.message, /UNAVAILABLE/);
+    assert.doesNotMatch(err.message, /tok-123/);
+    assert.match(err.message, /REDACTED/);
+    return true;
+  });
+
+  const { _test } = await import('../src/cloudflare-waf.js');
+  await assert.rejects(
+    _test.readResponseText({ headers: { get: () => '3' }, text: async () => 'abc' }, 2),
+    /RESOURCE_EXHAUSTED/,
+  );
+
+  let cancelled = false;
+  const chunks = [new Uint8Array([97, 98]), new Uint8Array([99])];
+  const reader = {
+    async read() { return chunks.length ? { done: false, value: chunks.shift() } : { done: true }; },
+    async cancel() { cancelled = true; },
+  };
+  await assert.rejects(
+    _test.readResponseText({ headers: { get: () => null }, body: { getReader: () => reader } }, 2),
+    /RESOURCE_EXHAUSTED/,
+  );
+  assert.equal(cancelled, true);
+  assert.equal(_test.redact('apiToken=tok-123', ['tok-123']), 'apiToken=[REDACTED]');
+});
+
+test('SetSecurityLevel avoids a PATCH when the requested level already matches', async () => {
+  let calls = 0;
+  setFetch((url, init) => {
+    calls += 1;
+    assert.equal(init.method, 'GET');
+    return cfOk({ id: 'security_level', value: 'high', editable: true });
+  });
+  const handler = (await loadRpc({ value: 'high' }))[setSecPath];
+  const out = await handler();
+  assert.equal(out.value, 'high');
+  assert.equal(calls, 1);
 });
 
 test('handlers / registerHandlers run through the legacy ctx wrapper', async () => {
