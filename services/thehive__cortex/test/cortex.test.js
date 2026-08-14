@@ -44,13 +44,184 @@ test('internal helpers normalize bindings, headers, errors, and call context', a
 
   assert.deepEqual(_test.parseHeaders(undefined), {});
   assert.deepEqual(_test.parseHeaders('{"X-Test":"yes"}'), { 'X-Test': 'yes' });
+  assert.deepEqual(_test.parseHeaders('{not json'), {});
+  assert.deepEqual(_test.parseHeaders(['not-a-header']), {});
   assert.equal(_test.normalizeBaseUrl('ftp://bad'), null);
-  assert.equal(_test.normalizeBaseUrl('http://good'), 'http://good');
+  assert.equal(_test.normalizeBaseUrl('http://cortex.example.test'), null);
+  assert.equal(_test.normalizeBaseUrl('https://cortex.example.test/base/'), 'https://cortex.example.test/base');
+  assert.equal(_test.normalizeBaseUrl('http://good'), null);
   assert.equal(_test.toPositiveInt({ value: '7' }), 7);
   assert.equal(_test.toPositiveInt({}), null);
+  assert.equal(_test.toPositiveInt('not-a-number'), null);
+  assert.deepEqual(_test.toValue(['x', 2, true]), {
+    listValue: { values: [{ stringValue: 'x' }, { numberValue: 2 }, { boolValue: true }] },
+  });
+  assert.deepEqual(_test.toValue({ missing: null }), {
+    structValue: { fields: { missing: { nullValue: 'NULL_VALUE' } } },
+  });
+  assert.deepEqual(_test.mergedBindings({}), {});
+  assert.deepEqual(_test.sanitizeHeaders({ 'X-Number': 2 }), {});
+  assert.deepEqual(_test.toValue(1n), { stringValue: '1' });
+  assert.equal(_test.unwrapString(null), '');
+  assert.equal(_test.unwrapString({ value: null }), '');
 
   const unknown = _test.errorWithCode('SOMETHING_NEW', 'message');
   assert.equal(unknown.legacyCode, 'SOMETHING_NEW');
+});
+
+test('security helpers preserve TLS verification, redact unsafe headers, and bound response bodies', async () => {
+  const { _test } = await import('../src/cortex.js');
+
+  assert.deepEqual(_test.sanitizeHeaders({
+    Authorization: 'attacker-token',
+    Host: 'attacker.example',
+    'X-Allowed': 'ok',
+    'Content-Type': 'text/plain',
+  }), { 'X-Allowed': 'ok' });
+  assert.throws(() => _test.resolveTimeoutMs('0'), /INVALID_ARGUMENT/);
+  assert.equal(_test.resolveTimeoutMs('1234'), 1234);
+
+  await assert.rejects(
+    () => _test.readResponseText({
+      headers: new Map([['content-length', String(4 * 1024 * 1024 + 1)]]),
+      text: async () => '',
+    }),
+    /RESOURCE_EXHAUSTED/,
+  );
+  const chunks = [new Uint8Array([123]), new Uint8Array([125])];
+  let released = false;
+  assert.equal(await _test.readResponseText({
+    headers: new Map(),
+    body: { getReader: () => ({
+      read: async () => (chunks.length ? { done: false, value: chunks.shift() } : { done: true }),
+      cancel: async () => {},
+      releaseLock: () => { released = true; },
+    }) },
+  }), '{}');
+  assert.equal(released, true);
+  await assert.rejects(
+    () => _test.readResponseText({
+      headers: new Map(),
+      text: async () => 'x'.repeat(4 * 1024 * 1024 + 1),
+    }),
+    /RESOURCE_EXHAUSTED/,
+  );
+  let cancelled = false;
+  let releasedAfterLimit = false;
+  await assert.rejects(
+    () => _test.readResponseText({
+      headers: new Map(),
+      body: { getReader: () => ({
+        read: async () => ({ done: false, value: new Uint8Array(4 * 1024 * 1024 + 1) }),
+        cancel: async () => { cancelled = true; },
+        releaseLock: () => { releasedAfterLimit = true; },
+      }) },
+    }),
+    /RESOURCE_EXHAUSTED/,
+  );
+  assert.equal(cancelled, true);
+  assert.equal(releasedAfterLimit, true);
+  assert.equal(_test.normalizeBaseUrl('https://user:pass@cortex.example'), null);
+  assert.equal(_test.normalizeBaseUrl('https://cortex.example?query=1'), null);
+  assert.equal(_test.normalizeBaseUrl('not a URL'), null);
+  assert.equal(_test.normalizeBaseUrl('http://127.0.0.1:9001/'), 'http://127.0.0.1:9001');
+});
+
+test('response shape fallbacks preserve Cortex API compatibility', async () => {
+  const responses = [
+    { data: [{ _id: 'analyzer-alt', analyzer_definition_id: 'worker-alt', data_type_list: ['domain'] }] },
+    { data: [{ _id: 'job-alt', analyzer_id: 'a', analyzer_name: 'name', analyzer_definition_id: 'definition', data_type: 'ip', start_date: 'start', end_date: 'end' }] },
+    { _id: 'job-no-report', status: 'Waiting', report: null },
+  ];
+  setFetch(async () => ({
+    ok: true,
+    status: 200,
+    headers: new Map([['content-type', 'application/json']]),
+    text: async () => JSON.stringify(responses.shift()),
+  }));
+
+  const listAnalyzers = await loadHandler(listAnalyzersPath);
+  const analyzers = await listAnalyzers();
+  assert.equal(analyzers.data.analyzers[0].id, 'analyzer-alt');
+  assert.equal(analyzers.data.analyzers[0].analyzer_definition_id, 'worker-alt');
+
+  const listJobs = await loadHandler(listJobsPath);
+  const jobs = await listJobs();
+  assert.equal(jobs.data.jobs[0].id, 'job-alt');
+  assert.equal(jobs.data.jobs[0].analyzer_id, 'a');
+
+  const getReport = await loadHandler(getJobReportPath, { job_id: 'job-no-report' });
+  const report = await getReport();
+  assert.equal(report.data.status, 'Waiting');
+  assert.equal(report.data.success, false);
+});
+
+test('empty successful bodies use RPC-specific empty values', async () => {
+  setFetch(async () => ({
+    ok: true,
+    status: 200,
+    headers: new Map([['content-type', 'application/json']]),
+    text: async () => '',
+  }));
+  const handler = await loadHandler(listAnalyzersPath);
+  assert.deepEqual((await handler()).data.analyzers, []);
+});
+
+test('Cortex response aliases and less-common error paths are mapped safely', async () => {
+  const responses = [
+    { _id: 'single-analyzer', workerDefinitionId: 'worker', dataTypeList: ['ip'], tlp: 0 },
+    { _id: 'single-job', workerId: 'worker', workerName: 'worker-name', workerDefinitionId: 'worker-definition', createdAt: 'now' },
+    { _id: 'numeric-report', status: 'Deleted', report: 42 },
+    { success: true, summary: 'not-an-object', full: 'not-an-object', operations: ['op'], artifacts: [{ dataType: 'domain', tags: ['tag'] }] },
+  ];
+  setFetch(async () => ({
+    ok: true,
+    status: 200,
+    headers: new Map([['content-type', 'application/json']]),
+    text: async () => JSON.stringify(responses.shift()),
+  }));
+
+  const listAnalyzers = await loadHandler(listAnalyzersPath, { dataType: { value: 'ip' } });
+  assert.equal((await listAnalyzers()).data.analyzers[0].id, 'single-analyzer');
+  const listJobs = await loadHandler(listJobsPath);
+  assert.equal((await listJobs()).data.jobs[0].analyzer_id, 'worker');
+  const numericReport = await loadHandler(getJobReportPath, { jobId: 'numeric-report' });
+  assert.equal((await numericReport()).data.status, 'Deleted');
+  const successReport = await loadHandler(getJobReportPath, { job_id: 'success-report' });
+  const mapped = await successReport();
+  assert.deepEqual(mapped.data.summary, {});
+  assert.equal(mapped.data.artifacts[0].data_type, 'domain');
+});
+
+test('all RPCs reject malformed endpoints and status aliases select the batch API', async () => {
+  const malformed = { bindings: { endpoint: 'https://cortex.example/path?not-allowed=yes' } };
+  const report = await loadHandler(getJobReportPath, { job_id: 'x' }, malformed);
+  const status = await loadHandler(getJobStatusPath, { job_id: 'x' }, malformed);
+  await assert.rejects(() => report(), /INVALID_ARGUMENT/);
+  await assert.rejects(() => status(), /INVALID_ARGUMENT/);
+
+  let captured;
+  setFetch(async (url, init) => {
+    captured = { url, init };
+    return {
+      ok: true,
+      status: 200,
+      headers: new Map([['content-type', 'application/json']]),
+      text: async () => JSON.stringify({ first: 'Success' }),
+    };
+  });
+  const batch = await loadHandler(getJobStatusPath, { job_id: 'ignored', jobIds: ['first'] });
+  assert.equal((await batch()).data.statuses[0].status, 'Success');
+  assert.equal(captured.url, 'http://localhost:18080/api/job/status');
+
+  const { handlers, METHOD_LIST_ANALYZERS_FULL } = await import('../src/cortex.js');
+  const viaReqAlias = await handlers[METHOD_LIST_ANALYZERS_FULL]({
+    config: { endpoint: 'http://localhost:18080' },
+    req: {},
+  });
+  assert.deepEqual(viaReqAlias.data.analyzers, [{
+    id: '', name: '', analyzer_definition_id: '', description: '', data_type_list: [], version: '', tlp: 2, state: '', raw: { first: 'Success' },
+  }]);
 });
 
 // ==================== ListAnalyzers ====================
@@ -113,6 +284,32 @@ test('ListAnalyzers with dataType filter uses /api/analyzer/type/:dataType', asy
   assert.equal(captured.init.method, 'GET');
   assert.match(captured.init.headers['Authorization'], /^Basic /);
   assert.equal(res.data.analyzers.length, 1);
+});
+
+test('Basic Auth supports Unicode credentials and fetch uses secure transport options', async () => {
+  let captured;
+  setFetch(async (url, init) => {
+    captured = { url, init };
+    return {
+      ok: true,
+      status: 200,
+      headers: new Map([['content-type', 'application/json']]),
+      text: async () => '[]',
+    };
+  });
+
+  const handler = await loadHandler(listAnalyzersPath, {}, {
+    secret: { username: '用户', password: '密码🔐' },
+  });
+  await handler();
+
+  assert.equal(
+    captured.init.headers.Authorization,
+    `Basic ${Buffer.from('用户:密码🔐', 'utf8').toString('base64')}`,
+  );
+  assert.equal(captured.init.redirect, 'error');
+  assert.ok(captured.init.dispatcher, 'TLS-verifying undici dispatcher is supplied');
+  assert.ok(captured.init.signal instanceof AbortSignal);
 });
 
 test('ListAnalyzers handles empty response', async () => {
@@ -331,6 +528,15 @@ test('timeoutMs from config/bindings takes precedence over limits', async () => 
   // The signal should reflect the config timeoutMs (3000), not limits (10000).
   // We verify the timeout was created by checking the AbortSignal exists.
   assert.ok(captured.init.signal);
+});
+
+test('invalid timeout configuration is rejected instead of silently falling back', async () => {
+  await assert.rejects(
+    () => loadHandler(listAnalyzersPath, {}, {
+      bindings: { endpoint: 'http://localhost:9002', timeoutMs: 'not-a-number' },
+    }),
+    /INVALID_ARGUMENT: timeoutMs/,
+  );
 });
 
 test('GetJobReport maps in-progress job without explicit status', async () => {
@@ -565,7 +771,7 @@ test('SDK handlers accept single context with config and secret', async () => {
   assert.equal(captured.init.headers['X-Extra'], undefined); // no extra headers in config
 });
 
-test('SDK handlers accept request plus inner context arguments', async () => {
+test('SDK handlers use one context for request, bindings, secrets, and metadata', async () => {
   let captured;
   setFetch(async (url, init) => {
     captured = { url, init };
@@ -582,19 +788,15 @@ test('SDK handlers accept request plus inner context arguments', async () => {
     };
   });
 
-  const { _test } = await import('../src/cortex.js');
-  const registered = _test.registerHandlers({
-    bindings: {
-      endpoint: 'http://base',
+  const { handlers, METHOD_ANALYZE_OBSERVABLE_FULL } = await import('../src/cortex.js');
+  const res = await handlers[METHOD_ANALYZE_OBSERVABLE_FULL]({
+    request: {
+      analyzer_id: 'vt1',
+      data: '1.1.1.1',
+      data_type: 'ip',
     },
-  });
-  const res = await registered[analyzeObservablePath]({
-    analyzer_id: 'vt1',
-    data: '1.1.1.1',
-    data_type: 'ip',
-  }, {
     bindings: {
-      endpoint: 'http://inner',
+      endpoint: 'http://localhost:18081',
     },
     secret: {
       apiKey: 'inner-key',
@@ -605,7 +807,7 @@ test('SDK handlers accept request plus inner context arguments', async () => {
     },
   });
 
-  assert.equal(captured.url, 'http://inner/api/analyzer/vt1/run');
+  assert.equal(captured.url, 'http://localhost:18081/api/analyzer/vt1/run');
   assert.equal(captured.init.headers['Authorization'], 'Bearer inner-key');
   assert.equal(captured.init.headers['x-engine-instance'], 'inst-camel');
 });
@@ -724,7 +926,7 @@ test('HTTP errors map to correct gRPC codes', async () => {
     throw Object.assign(new Error('fail'), { cause: new Error('connection reset') });
   });
   const handlerNetwork = await loadHandler(listAnalyzersPath);
-  await assert.rejects(() => handlerNetwork(), /UNAVAILABLE: connection reset/);
+  await assert.rejects(() => handlerNetwork(), /UNAVAILABLE: upstream request failed/);
 
   // non-JSON → UNKNOWN
   setFetch(async () => ({

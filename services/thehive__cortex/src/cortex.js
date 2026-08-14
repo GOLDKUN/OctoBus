@@ -601,60 +601,23 @@ export function rpcdef(ctx) {
   };
 }
 
-const mergeCtx = (baseCtx, innerCtx) => ({
-  ...(baseCtx ?? {}),
-  ...(innerCtx ?? {}),
-  bindings: { ...(baseCtx?.bindings ?? {}), ...(innerCtx?.bindings ?? {}) },
-  config: { ...(baseCtx?.config ?? {}), ...(innerCtx?.config ?? {}) },
-  secret: { ...(baseCtx?.secret ?? {}), ...(innerCtx?.secret ?? {}) },
-  limits: innerCtx?.limits ?? baseCtx?.limits ?? {},
-  meta: innerCtx?.meta ?? baseCtx?.meta ?? {},
-  metadata: innerCtx?.metadata ?? baseCtx?.metadata ?? {},
-  getMetadata: innerCtx?.getMetadata ?? baseCtx?.getMetadata,
-});
-
-const resolveCallContext = (baseCtx, reqOrCtx, maybeInnerCtx) => {
-  if (maybeInnerCtx !== undefined) {
-    return { req: reqOrCtx ?? {}, ctx: mergeCtx(baseCtx, maybeInnerCtx) };
-  }
-  const innerCtx = reqOrCtx ?? {};
-  return {
-    req: innerCtx.request ?? innerCtx.req ?? {},
-    ctx: mergeCtx(baseCtx, innerCtx),
-  };
-};
-
-const wrapLegacyHandler = (baseCtx, methodPath) => async (reqOrCtx, maybeInnerCtx) => {
-  const call = resolveCallContext(baseCtx, reqOrCtx, maybeInnerCtx);
-  const legacyCtx = {
-    ...call.ctx,
-    req: call.req,
-  };
-  return rpcdef(legacyCtx)[methodPath]();
-};
-
-const registerHandlers = (ctx = {}) => ({
-  [METHOD_LIST_ANALYZERS]: wrapLegacyHandler(ctx, METHOD_LIST_ANALYZERS),
-  [METHOD_ANALYZE_OBSERVABLE]: wrapLegacyHandler(ctx, METHOD_ANALYZE_OBSERVABLE),
-  [METHOD_GET_JOB_REPORT]: wrapLegacyHandler(ctx, METHOD_GET_JOB_REPORT),
-  [METHOD_LIST_JOBS]: wrapLegacyHandler(ctx, METHOD_LIST_JOBS),
-  [METHOD_GET_JOB_STATUS]: wrapLegacyHandler(ctx, METHOD_GET_JOB_STATUS),
-});
-
 export const METHOD_LIST_ANALYZERS_FULL = 'TheHive_CORTEX.TheHive_CORTEX/ListAnalyzers';
 export const METHOD_ANALYZE_OBSERVABLE_FULL = 'TheHive_CORTEX.TheHive_CORTEX/AnalyzeObservable';
 export const METHOD_GET_JOB_REPORT_FULL = 'TheHive_CORTEX.TheHive_CORTEX/GetJobReport';
 export const METHOD_LIST_JOBS_FULL = 'TheHive_CORTEX.TheHive_CORTEX/ListJobs';
 export const METHOD_GET_JOB_STATUS_FULL = 'TheHive_CORTEX.TheHive_CORTEX/GetJobStatus';
 
-const sdkHandlers = registerHandlers({});
+const handle = (methodPath) => async (ctx = {}) => rpcdef({
+  ...ctx,
+  req: ctx.request ?? ctx.req ?? {},
+})[methodPath]();
 
 export const handlers = {
-  [METHOD_LIST_ANALYZERS_FULL]: (ctx) => sdkHandlers[METHOD_LIST_ANALYZERS](ctx),
-  [METHOD_ANALYZE_OBSERVABLE_FULL]: (ctx) => sdkHandlers[METHOD_ANALYZE_OBSERVABLE](ctx),
-  [METHOD_GET_JOB_REPORT_FULL]: (ctx) => sdkHandlers[METHOD_GET_JOB_REPORT](ctx),
-  [METHOD_LIST_JOBS_FULL]: (ctx) => sdkHandlers[METHOD_LIST_JOBS](ctx),
-  [METHOD_GET_JOB_STATUS_FULL]: (ctx) => sdkHandlers[METHOD_GET_JOB_STATUS](ctx),
+  [METHOD_LIST_ANALYZERS_FULL]: handle(METHOD_LIST_ANALYZERS),
+  [METHOD_ANALYZE_OBSERVABLE_FULL]: handle(METHOD_ANALYZE_OBSERVABLE),
+  [METHOD_GET_JOB_REPORT_FULL]: handle(METHOD_GET_JOB_REPORT),
+  [METHOD_LIST_JOBS_FULL]: handle(METHOD_LIST_JOBS),
+  [METHOD_GET_JOB_STATUS_FULL]: handle(METHOD_GET_JOB_STATUS),
 };
 
 export const _test = {
@@ -662,11 +625,10 @@ export const _test = {
   mergedBindings,
   normalizeBaseUrl,
   parseHeaders,
-  registerHandlers,
-  resolveCallContext,
   toPositiveInt,
   toValue,
   readResponseText,
   resolveTimeoutMs,
   sanitizeHeaders,
+  unwrapString,
 };
