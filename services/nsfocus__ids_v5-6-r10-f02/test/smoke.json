@@ -1,0 +1,16 @@
+{
+  "method": "NSFOCUS_IDS_V5_6_R10_F02.NSFOCUS_IDS_V5_6_R10_F02/QueryEventList",
+  "request": { "limit": 1 },
+  "expectUpstream": true,
+  "requireBusinessSuccess": true,
+  "requireUpstreamPerProtocol": true,
+  "protocols": ["connect", "grpc", "mcp"],
+  "upstream": {
+    "method": "GET",
+    "path": "/ips/eventList/detail/false/dns/false",
+    "headers": {
+      "cookie": "smoke-secret",
+      "x-requested-with": "XMLHttpRequest"
+    }
+  }
+}

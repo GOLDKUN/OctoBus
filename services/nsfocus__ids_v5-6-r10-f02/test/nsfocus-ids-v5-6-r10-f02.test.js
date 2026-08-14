@@ -35,6 +35,7 @@ const createHeaders = (entries = {}) => {
 };
 const fakeResponse = (status, body, ok = status >= 200 && status < 300) => ({ status, ok, headers: createHeaders(), text: async () => body });
 const withFetch = (impl) => { globalThis.fetch = impl; };
+const callHandler = (ctx, request = ctx.req ?? {}) => handlers[METHOD_QUERY_EVENT_LIST_FULL]({ ...ctx, request });
 
 test.afterEach(() => { globalThis.fetch = originalFetch; });
 
@@ -74,7 +75,7 @@ test('parses IDS event table into structured events', async () => {
 test('limit caps the number of returned events', async () => {
   const mock = await createMockServer();
   try {
-    const out = await handlers[METHOD_QUERY_EVENT_LIST_FULL]({ limit: 1 }, buildCtx(mock));
+    const out = await callHandler(buildCtx(mock), { limit: 1 });
     assert.equal(out.total, 1);
   } finally {
     await mock.close();
@@ -85,7 +86,7 @@ test('expired session (login page, no mytable) -> FAILED_PRECONDITION', async ()
   const mock = await createMockServer();
   try {
     await assert.rejects(
-      () => handlers[METHOD_QUERY_EVENT_LIST_FULL]({}, buildCtx(mock, { bindings: { cookie: 'PHPSESSID=wrong' } })),
+      () => callHandler(buildCtx(mock, { bindings: { cookie: 'PHPSESSID=wrong' } })),
       (e) => e.legacyCode === 'FAILED_PRECONDITION',
     );
   } finally {
@@ -96,8 +97,8 @@ test('expired session (login page, no mytable) -> FAILED_PRECONDITION', async ()
 // ---------- validation ----------
 
 test('binding validation', async () => {
-  await assert.rejects(() => handlers[METHOD_QUERY_EVENT_LIST_FULL]({}, buildCtx({ host: '' })), (e) => e.legacyCode === 'INVALID_ARGUMENT');
-  await assert.rejects(() => handlers[METHOD_QUERY_EVENT_LIST_FULL]({}, buildCtx({ host: 'https://h', cookie: '' })), (e) => e.legacyCode === 'INVALID_ARGUMENT');
+  await assert.rejects(() => callHandler(buildCtx({ host: '' })), (e) => e.legacyCode === 'INVALID_ARGUMENT');
+  await assert.rejects(() => callHandler(buildCtx({ host: 'https://h', cookie: '' })), (e) => e.legacyCode === 'INVALID_ARGUMENT');
 });
 
 // ---------- error mapping ----------
@@ -105,27 +106,27 @@ test('binding validation', async () => {
 test('error mapping: network / http', async () => {
   const ctx = buildCtx({ host: 'https://ids', cookie: 'c=1' });
   withFetch(async () => { throw new Error('ECONNREFUSED'); });
-  await assert.rejects(() => handlers[METHOD_QUERY_EVENT_LIST_FULL]({}, ctx), (e) => e.legacyCode === 'UNAVAILABLE');
+  await assert.rejects(() => callHandler(ctx), (e) => e.legacyCode === 'UNAVAILABLE');
   withFetch(async () => fakeResponse(401, 'no', false));
-  await assert.rejects(() => handlers[METHOD_QUERY_EVENT_LIST_FULL]({}, ctx), (e) => e.legacyCode === 'PERMISSION_DENIED');
+  await assert.rejects(() => callHandler(ctx), (e) => e.legacyCode === 'PERMISSION_DENIED');
   withFetch(async () => fakeResponse(404, 'no', false));
-  await assert.rejects(() => handlers[METHOD_QUERY_EVENT_LIST_FULL]({}, ctx), (e) => e.legacyCode === 'FAILED_PRECONDITION');
+  await assert.rejects(() => callHandler(ctx), (e) => e.legacyCode === 'FAILED_PRECONDITION');
   withFetch(async () => fakeResponse(500, 'no', false));
-  await assert.rejects(() => handlers[METHOD_QUERY_EVENT_LIST_FULL]({}, ctx), (e) => e.legacyCode === 'UNAVAILABLE');
+  await assert.rejects(() => callHandler(ctx), (e) => e.legacyCode === 'UNAVAILABLE');
 });
 
-test('fetch error fallback message', async () => {
+test('transport failures redact credential and upstream details', async () => {
   const ctx = buildCtx({ host: 'https://ids', cookie: 'c=1' });
   withFetch(async () => { throw {}; });
-  await assert.rejects(() => handlers[METHOD_QUERY_EVENT_LIST_FULL]({}, ctx), (e) => /fetch failed/.test(e.message));
+  await assert.rejects(() => callHandler(ctx), (e) => /upstream request failed/.test(e.message));
   withFetch(async () => { const e = new Error('m'); e.cause = { message: 'deep' }; throw e; });
-  await assert.rejects(() => handlers[METHOD_QUERY_EVENT_LIST_FULL]({}, ctx), (e) => /deep/.test(e.message));
+  await assert.rejects(() => callHandler(ctx), (e) => !e.message.includes('deep') && !e.message.includes('c=1'));
 });
 
 test('valid event page with zero data rows returns empty entries', async () => {
   const ctx = buildCtx({ host: 'https://ids', cookie: 'c=1' });
   withFetch(async () => fakeResponse(200, '<table id="mytable"><tr class="first_title"><th>状态</th></tr></table>'));
-  const out = await handlers[METHOD_QUERY_EVENT_LIST_FULL]({}, ctx);
+  const out = await callHandler(ctx);
   assert.equal(out.total, 0);
   assert.deepEqual(out.entries, []);
 });
@@ -140,6 +141,7 @@ test('helper coverage', () => {
   const h = _test;
   assert.equal(h.normalizeBaseUrl('https://h/'), 'https://h');
   assert.equal(h.normalizeBaseUrl('ftp://x'), '');
+  assert.equal(h.normalizeBaseUrl('https://user:password@h'), '');
   assert.equal(h.resolveCookie({ session_cookie: 'c' }), 'c');
   assert.equal(h.resolveCookie({ sessionCookie: 'c2' }), 'c2');
   assert.equal(h.decodeEntities('a&amp;b&lt;c&gt;&quot;&#39;&nbsp;d'), 'a&b<c>"\' d');
@@ -149,7 +151,7 @@ test('helper coverage', () => {
   assert.deepEqual(h.splitIpPort('noport'), { ip: 'noport', port: '' });
 
   // parseEventList: skip header/non-data rows, require datetime
-  const mkRow = (cls, time, withProxy) => `<tr class="${cls}">`
+  const mkRow = (cls, time, withProxy, beforeClass = '') => `<tr ${beforeClass} class="${cls}">`
     + `<td><img title="高危险程度"><img title="阻断"><img title="反馈厂商"></td>`
     + `<td>${time}</td>`
     + `<td><a>[123]&nbsp;测试事件</a></td>`
@@ -158,7 +160,7 @@ test('helper coverage', () => {
   const html = '<tr class="first_title"><th>x</th></tr>'
     + mkRow('even', '2026-01-02 03:04:05', false)
     + mkRow('odd', 'not-a-time', false)
-    + mkRow('even', '2026-01-02 03:04:06', true);
+    + mkRow('even', '2026-01-02 03:04:06', true, 'data-row="two"');
   const parsed = h.parseEventList(html);
   assert.equal(parsed.length, 2);
   assert.equal(parsed[0].severity, '高');
@@ -179,19 +181,22 @@ test('helper coverage', () => {
   assert.equal(h.pickBoolean(true), true);
   assert.equal(h.pickBoolean(0), false);
   assert.equal(h.pickBoolean('maybe'), undefined);
+  assert.equal(h.pickBoolean(Number.NaN), undefined);
   assert.equal(h.pickFirstBoolean(['x', 'true']), true);
   assert.equal(h.unwrapScalar({ value: { value: 2 } }), 2);
+  assert.equal(h.hasOwn({}, 'missing'), false);
   assert.deepEqual(h.sanitizeHeaders({ A: 1, '': 2 }), { A: '1' });
   assert.deepEqual(h.sanitizeHeaders('x'), {});
-  assert.equal(h.buildTlsOptions({ skipTlsVerify: true }).skipTlsVerify, true);
+  assert.ok(h.buildTlsOptions({ skipTlsVerify: true }, 'https://h').dispatcher);
+  assert.deepEqual(h.buildTlsOptions({ skipTlsVerify: true }, 'http://h'), {});
   assert.deepEqual(h.buildTlsOptions({}), {});
   assert.equal(h.resolveTimeoutMs({ limits: { timeoutMs: 0 } }), 5000);
   assert.equal(h.resolveTimeoutMs({ limits: { timeoutMs: 321 } }), 321);
   assert.equal(h.grpcCodeFor('NOPE'), grpcStatus.UNKNOWN);
   assert.ok(h.errorWithCode('UNAVAILABLE', 'x') instanceof GrpcError);
-  assert.throws(() => h.throwForHttpStatus(403, 'x'), (e) => e.legacyCode === 'PERMISSION_DENIED');
-  assert.throws(() => h.throwForHttpStatus(400, 'x'), (e) => e.legacyCode === 'FAILED_PRECONDITION');
-  assert.throws(() => h.throwForHttpStatus(500, 'x'), (e) => e.legacyCode === 'UNAVAILABLE');
+  assert.throws(() => h.throwForHttpStatus(403), (e) => e.legacyCode === 'PERMISSION_DENIED');
+  assert.throws(() => h.throwForHttpStatus(302), (e) => e.legacyCode === 'FAILED_PRECONDITION');
+  assert.throws(() => h.throwForHttpStatus(500), (e) => e.legacyCode === 'UNAVAILABLE');
   const hdr = h.buildHeaders({ headers: { 'X-A': '1' } }, { instance_id: 'i', request_id: 'r' }, { cookie: 'c=1', refererUrl: 'https://h/ips/event' });
   assert.equal(hdr.cookie, 'c=1');
   assert.equal(hdr.referer, 'https://h/ips/event');
@@ -199,6 +204,56 @@ test('helper coverage', () => {
   assert.equal(hdr['X-A'], '1');
   assert.deepEqual(h.resolveCallContext({ request: { a: 1 } }).req, { a: 1 });
   assert.deepEqual(h.resolveCallContext({}).req, {});
+  assert.deepEqual(h.requestFromContext({ req: { b: 2 } }), { b: 2 });
+  assert.deepEqual(h.requestFromContext({}), {});
+  assert.equal(h.resolveMaxResponseBytes({ limits: { maxResponseBytes: 99 } }), 99);
+  assert.equal(h.resolveMaxResponseBytes({ limits: { maxResponseBytes: 999999999 } }), 10 * 1024 * 1024);
+  assert.equal(h.resolveMaxResponseBytes({ limits: { maxResponseBytes: 0 } }), 4 * 1024 * 1024);
+});
+
+test('transport uses SDK-0.6 single context, timeout, manual redirects and bounded responses', async () => {
+  const ctx = buildCtx({ host: 'https://ids', cookie: 'secret-cookie' });
+  let init;
+  withFetch(async (_url, options) => { init = options; return fakeResponse(200, '<table id="mytable"></table>'); });
+  await callHandler(ctx);
+  assert.equal(init.redirect, 'manual');
+  assert.ok(init.signal instanceof AbortSignal);
+  assert.equal(init.headers.cookie, 'secret-cookie');
+  assert.equal(init.headers.referer, 'https://ids/ips/event');
+  assert.equal(init.headers['x-requested-with'], 'XMLHttpRequest');
+
+  withFetch(async () => fakeResponse(302, '<html>login</html>', false));
+  await assert.rejects(() => callHandler(ctx), (e) => e.legacyCode === 'FAILED_PRECONDITION');
+  withFetch(async () => ({ ...fakeResponse(200, '<table id="mytable"></table>'), headers: createHeaders({ 'content-length': '4097' }) }));
+  await assert.rejects(() => callHandler(buildCtx({ host: 'https://ids', cookie: 'secret-cookie' }, { limits: { maxResponseBytes: 4096 } })), (e) => e.legacyCode === 'RESOURCE_EXHAUSTED');
+  withFetch(async () => { const error = new Error('timeout'); error.name = 'TimeoutError'; throw error; });
+  await assert.rejects(() => callHandler(ctx), (e) => e.legacyCode === 'DEADLINE_EXCEEDED');
+});
+
+test('streaming response bounds cancel oversized bodies and map read errors', async () => {
+  let cancelled = false;
+  const oversizedReader = {
+    async read() { return { done: false, value: new Uint8Array(5) }; },
+    async cancel() { cancelled = true; },
+  };
+  await assert.rejects(
+    () => _test.readBoundedText({ headers: createHeaders(), body: { getReader: () => oversizedReader } }, 4),
+    (e) => e.legacyCode === 'RESOURCE_EXHAUSTED',
+  );
+  assert.equal(cancelled, true);
+  const failingReader = { async read() { throw new Error('stream fail'); } };
+  await assert.rejects(
+    () => _test.readBoundedText({ headers: createHeaders(), body: { getReader: () => failingReader } }, 4),
+    (e) => e.legacyCode === 'UNAVAILABLE',
+  );
+  await assert.rejects(
+    () => _test.readBoundedText({ headers: createHeaders(), text: async () => { throw new Error('read fail'); } }, 4),
+    (e) => e.legacyCode === 'UNAVAILABLE',
+  );
+  await assert.rejects(
+    () => _test.readBoundedText({ headers: createHeaders(), text: async () => '12345' }, 4),
+    (e) => e.legacyCode === 'RESOURCE_EXHAUSTED',
+  );
 });
 
 test('rpcdef falls back to ctx.req when called without an argument', async () => {

@@ -1,24 +1,28 @@
-// 绿盟(NSFOCUS)IDS/IPS V5.6R10F02 告警事件查询适配。
-// 认证:web 会话 Cookie。GET /ips/eventList/detail/false/dns/false 返回 HTML 事件表，解析为结构化事件。
+// NSFOCUS IDS/IPS V5.6R10F02 event-list adapter. The upstream is an HTML page
+// authenticated with a short-lived browser session cookie.
 import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
+import { Agent } from 'undici';
 
 const SVC = 'NSFOCUS_IDS_V5_6_R10_F02.NSFOCUS_IDS_V5_6_R10_F02';
 export const QUERY_EVENT_LIST_PATH = `/${SVC}/QueryEventList`;
 export const METHOD_QUERY_EVENT_LIST_FULL = `${SVC}/QueryEventList`;
-
 export const EVENT_LIST_URI = '/ips/eventList/detail/false/dns/false';
 export const EVENT_REFERER_PATH = '/ips/event';
-export const EVENT_TABLE_MARKER = 'mytable';
 export const DEFAULT_TIMEOUT_MS = 5000;
+export const MAX_TIMEOUT_MS = 120000;
+export const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+export const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 
 const DATETIME_RE = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/;
-// 状态单元格里非「危险程度/动作」的 img title，需从动作判定中排除。
 const NON_ACTION_TITLES = new Set(['反馈厂商', '下载pcap文件', '代理IP']);
+let insecureDispatcher;
 
 const grpcCodeFor = (code) => ({
+  DEADLINE_EXCEEDED: grpcStatus.DEADLINE_EXCEEDED,
   FAILED_PRECONDITION: grpcStatus.FAILED_PRECONDITION,
   INVALID_ARGUMENT: grpcStatus.INVALID_ARGUMENT,
   PERMISSION_DENIED: grpcStatus.PERMISSION_DENIED,
+  RESOURCE_EXHAUSTED: grpcStatus.RESOURCE_EXHAUSTED,
   UNAVAILABLE: grpcStatus.UNAVAILABLE,
   UNKNOWN: grpcStatus.UNKNOWN,
 })[code] ?? grpcStatus.UNKNOWN;
@@ -30,103 +34,68 @@ const errorWithCode = (code, message) => {
 };
 
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj ?? {}, key);
-
-const unwrapScalar = (value) => {
-  if (value === undefined || value === null) return undefined;
-  if (typeof value === 'object' && hasOwn(value, 'value')) return unwrapScalar(value.value);
-  return value;
-};
-
+const firstDefined = (...values) => values.find((value) => value !== undefined && value !== null);
+const unwrapScalar = (value) => (value && typeof value === 'object' && hasOwn(value, 'value') ? unwrapScalar(value.value) : value);
 const pickFirstString = (values = []) => {
   for (const value of values) {
-    const raw = unwrapScalar(value);
-    if (raw === undefined || raw === null) continue;
-    const str = String(raw).trim();
-    if (str) return str;
+    const text = String(unwrapScalar(value) ?? '').trim();
+    if (text) return text;
   }
   return '';
 };
-
-const pickStringFrom = (source = {}, keys = []) => {
-  for (const key of keys) {
-    if (!hasOwn(source, key)) continue;
-    const raw = unwrapScalar(source[key]);
-    if (raw === undefined || raw === null) continue;
-    const value = String(raw).trim();
-    if (value) return value;
-  }
-  return '';
-};
-
+const pickStringFrom = (source = {}, keys = []) => pickFirstString(keys.map((key) => source[key]));
 const pickInt = (source = {}, keys = [], fallback = 0) => {
   for (const key of keys) {
-    if (!hasOwn(source, key)) continue;
     const raw = unwrapScalar(source[key]);
     if (raw === undefined || raw === null || raw === '') continue;
-    const num = Number(raw);
-    if (Number.isFinite(num)) return Math.trunc(num);
+    const value = Number(raw);
+    if (Number.isFinite(value)) return Math.trunc(value);
   }
   return fallback;
 };
-
 const pickBoolean = (value) => {
   const raw = unwrapScalar(value);
-  if (raw === undefined || raw === null) return undefined;
   if (typeof raw === 'boolean') return raw;
-  if (typeof raw === 'number') return Number.isNaN(raw) ? undefined : raw !== 0;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw !== 0 : undefined;
   if (typeof raw === 'string') {
-    const normalized = raw.trim().toLowerCase();
-    if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
-    if (['false', '0', 'no', 'n', 'off', ''].includes(normalized)) return false;
+    const text = raw.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', '0', 'no', 'n', 'off', ''].includes(text)) return false;
   }
   return undefined;
 };
-
-const pickFirstBoolean = (values = []) => {
-  for (const value of values) {
-    const bool = pickBoolean(value);
-    if (bool !== undefined) return bool;
-  }
-  return undefined;
-};
+const pickFirstBoolean = (values = []) => values.map(pickBoolean).find((value) => value !== undefined);
 
 const normalizeBaseUrl = (value) => {
-  const raw = String(unwrapScalar(value) || '').trim();
-  if (!/^https?:\/\//i.test(raw)) return '';
-  return raw.replace(/\/+$/, '');
+  try {
+    const url = new URL(String(unwrapScalar(value) ?? '').trim());
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) return '';
+    return url.toString().replace(/\/+$/, '');
+  } catch { return ''; }
 };
-
-const resolveCallContext = (ctx = {}) => ({
-  ...ctx,
-  bindings: {
-    ...(ctx.config ?? {}),
-    ...(ctx.secret ?? {}),
-    ...(ctx.bindings ?? {}),
-  },
-  limits: ctx.limits ?? {},
-  meta: ctx.meta ?? {},
-  req: ctx.req ?? ctx.request ?? {},
-});
-
-const resolveHost = (bindings = {}) => normalizeBaseUrl(pickFirstString([bindings.host, bindings.restBaseUrl, bindings.baseUrl]));
+const mergedBindings = (ctx = {}) => ({ ...(ctx.config ?? {}), ...(ctx.secret ?? {}), ...(ctx.bindings ?? {}) });
+const resolveCallContext = (ctx = {}) => ({ ...ctx, bindings: mergedBindings(ctx), limits: ctx.limits ?? {}, meta: ctx.meta ?? {}, req: ctx.request ?? ctx.req ?? {} });
+const requestFromContext = (ctx = {}) => ctx.request ?? ctx.req ?? {};
+const resolveHost = (bindings = {}) => normalizeBaseUrl(firstDefined(bindings.host, bindings.restBaseUrl, bindings.baseUrl));
 const resolveCookie = (bindings = {}) => pickStringFrom(bindings, ['cookie', 'sessionCookie', 'session_cookie']);
-
 const resolveTimeoutMs = (ctx = {}) => {
-  const raw = Number(unwrapScalar(ctx.limits?.timeoutMs ?? ctx.bindings?.timeoutMs ?? DEFAULT_TIMEOUT_MS));
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
+  const value = Number(firstDefined(ctx.limits?.timeoutMs, ctx.bindings?.timeoutMs, DEFAULT_TIMEOUT_MS));
+  return Number.isFinite(value) && value > 0 ? Math.min(Math.floor(value), MAX_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS;
 };
-
-const buildTlsOptions = (bindings = {}) => {
-  const enabled = pickFirstBoolean([bindings.skipTlsVerify, bindings.tlsInsecureSkipVerify, bindings.insecureSkipVerify]) || false;
-  return enabled ? { skipTlsVerify: true, tlsInsecureSkipVerify: true, insecureSkipVerify: true } : {};
+const resolveMaxResponseBytes = (ctx = {}) => {
+  const value = Number(firstDefined(ctx.limits?.maxResponseBytes, ctx.bindings?.maxResponseBytes, DEFAULT_MAX_RESPONSE_BYTES));
+  return Number.isSafeInteger(value) && value > 0 ? Math.min(value, MAX_RESPONSE_BYTES) : DEFAULT_MAX_RESPONSE_BYTES;
 };
-
+const buildTlsOptions = (bindings = {}, url = '') => {
+  const skip = pickFirstBoolean([bindings.skipTlsVerify, bindings.tlsInsecureSkipVerify, bindings.insecureSkipVerify]) === true;
+  if (!skip || !String(url).startsWith('https:')) return {};
+  insecureDispatcher ??= new Agent({ connect: { rejectUnauthorized: false } });
+  return { dispatcher: insecureDispatcher };
+};
 const sanitizeHeaders = (headers) => {
-  const raw = unwrapScalar(headers);
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-  return Object.fromEntries(Object.entries(raw).filter(([key]) => key).map(([key, value]) => [key, String(unwrapScalar(value) ?? '')]));
+  if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return {};
+  return Object.fromEntries(Object.entries(headers).filter(([key]) => key).map(([key, value]) => [key, String(unwrapScalar(value) ?? '')]));
 };
-
 const buildHeaders = (bindings = {}, meta = {}, { cookie, refererUrl } = {}) => ({
   ...sanitizeHeaders(bindings.headers),
   accept: 'text/javascript, text/html, application/xml, text/xml, */*',
@@ -136,153 +105,110 @@ const buildHeaders = (bindings = {}, meta = {}, { cookie, refererUrl } = {}) => 
   'x-engine-instance': pickFirstString([meta.instance_id, meta.instanceId, 'unknown']),
   'x-request-id': pickFirstString([meta.request_id, meta.requestId, 'unknown']),
 });
-
-const throwForHttpStatus = (status, text) => {
-  if (status === 401 || status === 403) throw errorWithCode('PERMISSION_DENIED', `upstream http ${status}: ${text}`);
-  if (status >= 400 && status < 500) throw errorWithCode('FAILED_PRECONDITION', `upstream http ${status}: ${text}`);
-  throw errorWithCode('UNAVAILABLE', `upstream http ${status}: ${text}`);
+const logTarget = (url) => {
+  try { const target = new URL(url); return { origin: target.origin, path: target.pathname }; } catch { return {}; }
 };
-
+const logFlow = (ctx, action, details = {}) => {
+  const meta = ctx?.meta ?? {};
+  const trace = [meta.instance_id ?? meta.instanceId, meta.request_id ?? meta.requestId].filter(Boolean).join(' ');
+  try { console.info(`[NSFOCUS_IDS][${action}]${trace ? `[${trace}]` : ''}`, JSON.stringify(details)); } catch { console.info(`[NSFOCUS_IDS][${action}]`, details); }
+};
 const requireBindings = (ctx = {}) => {
   const callCtx = resolveCallContext(ctx);
-  const bindings = callCtx.bindings || {};
-  const host = resolveHost(bindings);
-  if (!host) throw errorWithCode('INVALID_ARGUMENT', 'bindings.host is required');
-  const cookie = resolveCookie(bindings);
+  const host = resolveHost(callCtx.bindings);
+  if (!host) throw errorWithCode('INVALID_ARGUMENT', 'bindings.host is required and must be an http(s) URL without credentials');
+  const cookie = resolveCookie(callCtx.bindings);
   if (!cookie) throw errorWithCode('INVALID_ARGUMENT', 'bindings.cookie (web session cookie) is required');
-  return { ...callCtx, bindings, host, cookie };
+  return { ...callCtx, host, cookie };
 };
 
-const decodeEntities = (s) => String(s)
-  .replace(/&amp;/g, '&')
-  .replace(/&lt;/g, '<')
-  .replace(/&gt;/g, '>')
-  .replace(/&quot;/g, '"')
-  .replace(/&#0?39;/g, "'")
-  .replace(/&nbsp;/g, ' ');
-
-const stripTags = (s) => decodeEntities(String(s).replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
-
-const attrTitles = (cell) => {
-  const out = [];
-  const re = /title="([^"]*)"/g;
-  let m;
-  while ((m = re.exec(cell)) !== null) out.push(decodeEntities(m[1]));
-  return out;
-};
-
+const decodeEntities = (value) => String(value).replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&nbsp;/g, ' ');
+const stripTags = (value) => decodeEntities(String(value).replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+const attrTitles = (cell) => [...String(cell).matchAll(/\btitle\s*=\s*(["'])(.*?)\1/gi)].map((match) => decodeEntities(match[2]));
 const splitIpPort = (cell) => {
-  const text = stripTags(cell);
-  const idx = text.lastIndexOf(':');
-  if (idx <= 0) return { ip: text, port: '' };
-  return { ip: text.slice(0, idx).trim(), port: text.slice(idx + 1).trim() };
+  const text = stripTags(cell); const index = text.lastIndexOf(':');
+  return index <= 0 ? { ip: text, port: '' } : { ip: text.slice(0, index).trim(), port: text.slice(index + 1).trim() };
 };
-
-// 解析事件表为结构化事件:数据行 class=even/odd，时间列须为有效时间戳。
+const hasEventTable = (html) => /<table\b[^>]*\bid\s*=\s*(["'])mytable\1[^>]*>/i.test(String(html));
 const parseEventList = (html, limit = 0) => {
   const entries = [];
-  const rowRe = /<tr class="(?:even|odd)"[^>]*>([\s\S]*?)<\/tr>/gi;
-  let m;
-  while ((m = rowRe.exec(html)) !== null) {
-    const cells = [...m[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((x) => x[1]);
+  const rowRe = /<tr\b(?=[^>]*\bclass\s*=\s*(["'])(?:even|odd)\1)[^>]*>([\s\S]*?)<\/tr>/gi;
+  for (const match of String(html).matchAll(rowRe)) {
+    const cells = [...match[2].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((cell) => cell[1]);
     if (cells.length < 5) continue;
     const time = stripTags(cells[1]);
     if (!DATETIME_RE.test(time)) continue;
-
     const titles = attrTitles(cells[0]);
-    const severity = (titles.find((t) => t.endsWith('危险程度')) || '').replace('危险程度', '');
-    const action = titles.find((t) => !t.endsWith('危险程度') && !NON_ACTION_TITLES.has(t)) || '';
-
-    const anchor = (cells[2].match(/<a[^>]*>([\s\S]*?)<\/a>/i) || [])[1] || '';
-    const eventText = stripTags(anchor);
-    const em = eventText.match(/\[(\d+)\]\s*(.*)/);
-    const event_id = em ? em[1] : '';
-    const event_name = em ? em[2].trim() : eventText;
-
-    const src = splitIpPort(cells[3]);
-    const dst = splitIpPort(cells[4]);
-
+    const anchor = (cells[2].match(/<a\b[^>]*>([\s\S]*?)<\/a>/i) ?? [])[1] ?? '';
+    const eventText = stripTags(anchor); const event = eventText.match(/\[(\d+)\]\s*(.*)/);
+    const src = splitIpPort(cells[3]); const dst = splitIpPort(cells[4]);
     entries.push({
-      severity,
-      action,
-      time,
-      event_id,
-      event_name,
-      src_ip: src.ip,
-      src_port: src.port,
-      dst_ip: dst.ip,
-      dst_port: dst.port,
-      auth_user: stripTags(cells[5] ?? ''),
-      linked_account: stripTags(cells[6] ?? ''),
+      severity: (titles.find((title) => title.endsWith('危险程度')) ?? '').replace('危险程度', ''),
+      action: titles.find((title) => !title.endsWith('危险程度') && !NON_ACTION_TITLES.has(title)) ?? '',
+      time, event_id: event?.[1] ?? '', event_name: event ? event[2].trim() : eventText,
+      src_ip: src.ip, src_port: src.port, dst_ip: dst.ip, dst_port: dst.port,
+      auth_user: stripTags(cells[5] ?? ''), linked_account: stripTags(cells[6] ?? ''),
     });
     if (limit > 0 && entries.length >= limit) break;
   }
   return entries;
 };
-
+const readBoundedText = async (response, maxBytes) => {
+  const declaredLength = Number(response.headers?.get?.('content-length') ?? 0);
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response is too large');
+  if (!response.body?.getReader) {
+    let text;
+    try { text = await response.text(); } catch { throw errorWithCode('UNAVAILABLE', 'upstream response read failed'); }
+    if (Buffer.byteLength(text) > maxBytes) throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response is too large');
+    return text;
+  }
+  const reader = response.body.getReader(); const chunks = []; let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read(); if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) { await reader.cancel(); throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response is too large'); }
+      chunks.push(value);
+    }
+  } catch (err) {
+    if (err?.legacyCode) throw err;
+    throw errorWithCode('UNAVAILABLE', 'upstream response read failed');
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+};
+const throwForHttpStatus = (status) => {
+  if (status === 401 || status === 403) throw errorWithCode('PERMISSION_DENIED', `upstream HTTP ${status}`);
+  if (status >= 300 && status < 400) throw errorWithCode('FAILED_PRECONDITION', `upstream redirected with HTTP ${status}`);
+  if (status >= 400 && status < 500) throw errorWithCode('FAILED_PRECONDITION', `upstream HTTP ${status}`);
+  throw errorWithCode('UNAVAILABLE', `upstream HTTP ${status}`);
+};
+const isTimeout = (err) => err?.name === 'AbortError' || err?.name === 'TimeoutError';
 const runQueryEventList = async (req = {}, ctx = {}) => {
-  const bound = requireBindings(ctx);
-  const request = bound.req ? { ...bound.req, ...req } : req;
-  const limit = Math.max(0, pickInt(request, ['limit'], 0));
+  const callCtx = requireBindings(ctx); const limit = Math.max(0, pickInt(req, ['limit'], 0));
+  const url = `${callCtx.host}${EVENT_LIST_URI}`; const timeoutMs = resolveTimeoutMs(callCtx);
   let response;
   try {
-    response = await fetch(`${bound.host}${EVENT_LIST_URI}`, {
-      method: 'GET',
-      timeoutMs: resolveTimeoutMs(bound),
-      ...buildTlsOptions(bound.bindings),
-      headers: buildHeaders(bound.bindings, bound.meta, {
-        cookie: bound.cookie,
-        refererUrl: `${bound.host}${EVENT_REFERER_PATH}`,
-      }),
+    response = await fetch(url, {
+      method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(timeoutMs), ...buildTlsOptions(callCtx.bindings, url),
+      headers: buildHeaders(callCtx.bindings, callCtx.meta, { cookie: callCtx.cookie, refererUrl: `${callCtx.host}${EVENT_REFERER_PATH}` }),
     });
   } catch (err) {
-    throw errorWithCode('UNAVAILABLE', err?.cause?.message || err?.message || 'fetch failed');
+    const code = isTimeout(err) ? 'DEADLINE_EXCEEDED' : 'UNAVAILABLE';
+    logFlow(callCtx, 'QueryEventList:error', { ...logTarget(url), code });
+    throw errorWithCode(code, code === 'DEADLINE_EXCEEDED' ? `upstream request timed out after ${timeoutMs}ms` : 'upstream request failed');
   }
-  const text = await response.text();
-  const status = Number(response.status);
-  if (!response.ok) throwForHttpStatus(status, text);
-  // 会话失效时设备返回登录页(同样 200),用事件表标记区分。
-  if (!String(text || '').includes(EVENT_TABLE_MARKER)) {
-    throw errorWithCode('FAILED_PRECONDITION', 'unexpected response (session may be expired or not the IDS event page)');
-  }
+  const status = Number(response.status) || 0;
+  const text = await readBoundedText(response, resolveMaxResponseBytes(callCtx));
+  if (status < 200 || status >= 300) throwForHttpStatus(status);
+  if (!hasEventTable(text)) throw errorWithCode('FAILED_PRECONDITION', 'unexpected response (session may be expired or not the IDS event page)');
   const entries = parseEventList(text, limit);
+  logFlow(callCtx, 'QueryEventList:done', { ...logTarget(url), http_status: status, entry_count: entries.length, body_bytes: Buffer.byteLength(text) });
   return { http_status: status, total: entries.length, entries };
 };
 
 export function rpcdef(ctx = {}) {
   const callCtx = resolveCallContext(ctx);
-  return {
-    [QUERY_EVENT_LIST_PATH]: async (req) => runQueryEventList(req ?? callCtx.req, callCtx),
-  };
+  return { [QUERY_EVENT_LIST_PATH]: async (req) => runQueryEventList(req ?? callCtx.req, callCtx) };
 }
-
-export const handlers = {
-  [METHOD_QUERY_EVENT_LIST_FULL]: (req, ctx = {}) => runQueryEventList(req, ctx),
-};
-
-export const _test = {
-  attrTitles,
-  buildHeaders,
-  buildTlsOptions,
-  decodeEntities,
-  errorWithCode,
-  grpcCodeFor,
-  hasOwn,
-  normalizeBaseUrl,
-  parseEventList,
-  pickBoolean,
-  pickFirstBoolean,
-  pickFirstString,
-  pickInt,
-  pickStringFrom,
-  requireBindings,
-  resolveCallContext,
-  resolveCookie,
-  resolveHost,
-  resolveTimeoutMs,
-  sanitizeHeaders,
-  splitIpPort,
-  stripTags,
-  throwForHttpStatus,
-  unwrapScalar,
-};
+export const handlers = { [METHOD_QUERY_EVENT_LIST_FULL]: (ctx = {}) => runQueryEventList(requestFromContext(ctx), ctx) };
+export const _test = { attrTitles, buildHeaders, buildTlsOptions, decodeEntities, errorWithCode, grpcCodeFor, hasEventTable, hasOwn, normalizeBaseUrl, parseEventList, pickBoolean, pickFirstBoolean, pickFirstString, pickInt, pickStringFrom, readBoundedText, requestFromContext, requireBindings, resolveCallContext, resolveCookie, resolveHost, resolveMaxResponseBytes, resolveTimeoutMs, sanitizeHeaders, splitIpPort, stripTags, throwForHttpStatus, unwrapScalar };

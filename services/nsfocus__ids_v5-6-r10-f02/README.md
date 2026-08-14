@@ -5,9 +5,12 @@
 
 > 对应 OctoBus issue [#260](https://github.com/chaitin/OctoBus/issues/260)。
 
-## 支持版本
+## 支持版本与脱敏设备事实
 
-NSFOCUS IDS/IPS V5.6R10F02(web 控制台,事件页 `/ips/event`)。请求/响应按真机抓包对齐。
+NSFOCUS IDS/IPS V5.6R10F02(web 控制台,事件页 `/ips/event`)。作者提供的脱敏设备事实为：
+设备事件页以 `GET /ips/eventList/detail/false/dns/false` 返回 `table#mytable`，并要求会话
+Cookie、`Referer: /ips/event` 和 `X-Requested-With: XMLHttpRequest`。这些协议事实已由本包的
+保留地址测试夹具回归；仓库不保存原始响应、抓包、截图、归档文件、真实主机、Cookie 或业务地址。
 
 ## 认证方式(web 会话 Cookie)
 
@@ -71,5 +74,5 @@ npm test -- --service-dir nsfocus__ids_v5-6-r10-f02 --coverage
 npm run pack:check
 ```
 
-真机验证:用一个有效会话 cookie 调 `query-event-list`,确认返回 IDS 告警事件(危险程度/动作/时间/事件编号+名称/源/目的)。
-PR 附**真机验证截图**(cookie / host / 响应中的内网 IP 等敏感数据已打码)。**代码/测试/截图里不得出现真实 cookie、内网地址或业务数据。**
+真机复核时，用一个有效会话 Cookie 调 `query-event-list`，确认返回危险程度、动作、时间、事件编号+名称及源/目的地址字段。
+请仅保存可复核的脱敏文字记录；不得提交截图、抓包、归档、真实 Cookie、内网地址或业务数据。
