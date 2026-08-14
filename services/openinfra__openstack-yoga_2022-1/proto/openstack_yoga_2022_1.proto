@@ -1,0 +1,208 @@
+syntax = "proto3";
+
+package OpenStack_Yoga_2022_1;
+
+option go_package = "miner/grpc-service/OpenStack_Yoga_2022_1";
+
+service OpenStack_Yoga_2022_1 {
+  rpc ListProjects(Empty) returns (ListProjectsResponse);
+  rpc ListServers(ListServersRequest) returns (ListServersResponse);
+  rpc GetServer(GetServerRequest) returns (GetServerResponse);
+  rpc ListNetworks(ListNetworksRequest) returns (ListNetworksResponse);
+  rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse);
+  rpc ListFlavors(ListFlavorsRequest) returns (ListFlavorsResponse);
+}
+
+message Empty {}
+
+message Project {
+  string id = 1;
+  string name = 2;
+  string domain_id = 3;
+  bool enabled = 4;
+  string description = 5;
+  string parent_id = 6;
+  bool is_domain = 7;
+  string tags_json = 8;
+  string links_json = 9;
+}
+
+message ListProjectsResponse {
+  repeated Project projects = 1;
+}
+
+message ListServersRequest {
+  string project_id = 1;
+  string status = 2;
+  string name = 3;
+}
+
+message Server {
+  string id = 1;
+  string name = 2;
+  string status = 3;
+  string tenant_id = 4;
+  string user_id = 5;
+  string created = 6;
+  string updated = 7;
+  string host_id = 8;
+  string flavor_id = 9;
+  string image_id = 10;
+  map<string, string> addresses = 11;
+  string access_ip_v4 = 12;
+  string access_ip_v6 = 13;
+  string power_state = 14;
+  string vm_state = 15;
+  string task_state = 16;
+
+  string os_dcf_disk_config = 17;
+  string description = 18;
+  string key_name = 19;
+  bool locked = 20;
+  string locked_reason = 21;
+  string host_status = 22;
+  int64 progress = 23;
+  string config_drive = 24;
+  string tags = 25;
+  string os_ext_az_availability_zone = 26;
+
+  string os_ext_srv_attr_host = 27;
+  string os_ext_srv_attr_hostname = 28;
+  string os_ext_srv_attr_hypervisor_hostname = 29;
+  string os_ext_srv_attr_instance_name = 30;
+  string os_ext_srv_attr_kernel_id = 31;
+  int64 os_ext_srv_attr_launch_index = 32;
+  string os_ext_srv_attr_ramdisk_id = 33;
+  string os_ext_srv_attr_reservation_id = 34;
+  string os_ext_srv_attr_root_device_name = 35;
+  string os_ext_srv_attr_user_data = 36;
+  string os_srv_usg_launched_at = 37;
+  string os_srv_usg_terminated_at = 38;
+
+  string os_extended_volumes_volumes_attached_json = 39;
+  string security_groups_json = 40;
+  string trusted_image_certificates_json = 41;
+  string links_json = 42;
+}
+
+message ListServersResponse {
+  repeated Server servers = 1;
+}
+
+message GetServerRequest {
+  string server_id = 1;
+  string project_id = 2;
+}
+
+message GetServerResponse {
+  Server server = 1;
+}
+
+message ListNetworksRequest {
+  string project_id = 1;
+}
+
+message Network {
+  string id = 1;
+  string name = 2;
+  string status = 3;
+  bool admin_state_up = 4;
+  bool shared = 5;
+  bool external = 6;
+  string tenant_id = 7;
+  string project_id = 8;
+  string network_type = 9;
+  string segmentation_id = 10;
+
+  string dns_domain = 11;
+  int32 mtu = 12;
+  string qos_policy_id = 13;
+  int32 revision_number = 14;
+  string created_at = 15;
+  string updated_at = 16;
+  bool port_security_enabled = 17;
+  bool is_default = 18;
+
+  string ipv4_address_scope = 19;
+  string ipv6_address_scope = 20;
+  string availability_zone_hints_json = 21;
+  string availability_zones_json = 22;
+  string subnets_json = 23;
+  bool vlan_transparent = 24;
+  bool qinq = 25;
+  bool l2_adjacency = 26;
+}
+
+message ListNetworksResponse {
+  repeated Network networks = 1;
+}
+
+message ListVolumesRequest {
+  string project_id = 1;
+  string status = 2;
+  string name = 3;
+}
+
+message Volume {
+  string id = 1;
+  string name = 2;
+  string status = 3;
+  int64 size = 4;
+  string volume_type = 5;
+  string created_at = 6;
+  string updated_at = 7;
+  string tenant_id = 8;
+  string project_id = 9;
+  string availability_zone = 10;
+  string bootable = 11;
+
+  string description = 12;
+  bool encrypted = 13;
+  bool multiattach = 14;
+  string consistencygroup_id = 15;
+  string migration_status = 16;
+  string replication_status = 17;
+  string snapshot_id = 18;
+  string source_volid = 19;
+  string os_vol_host_attr_host = 20;
+  string os_vol_mig_status_attr_migstat = 21;
+  string os_vol_mig_status_attr_name_id = 22;
+  string provider_id = 23;
+  string group_id = 24;
+  string service_uuid = 25;
+  string cluster_name = 26;
+  string consumes_quota = 27;
+  string volume_type_id = 28;
+  string attachments_json = 29;
+  string metadata_json = 30;
+  string links_json = 31;
+  string shared_targets_json = 32;
+}
+
+message ListVolumesResponse {
+  repeated Volume volumes = 1;
+}
+
+message ListFlavorsRequest {
+  string project_id = 1;
+}
+
+message Flavor {
+  string id = 1;
+  string name = 2;
+  int64 vcpus = 3;
+  int64 ram = 4;
+  int64 disk = 5;
+  int64 swap = 6;
+  int64 rxtx_factor = 7;
+  bool is_public = 8;
+  bool disabled = 9;
+  string description = 10;
+  int64 ephemeral = 11;
+  string extra_specs_json = 12;
+  string links_json = 13;
+}
+
+message ListFlavorsResponse {
+  repeated Flavor flavors = 1;
+}

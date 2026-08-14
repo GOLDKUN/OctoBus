@@ -1,0 +1,8 @@
+{
+  "method": "OpenStack_Yoga_2022_1.OpenStack_Yoga_2022_1/ListProjects",
+  "request": {},
+  "expectUpstream": true,
+  "requireBusinessSuccess": true,
+  "requireUpstreamPerProtocol": true,
+  "protocols": ["connect", "grpc", "mcp"]
+}

@@ -1,0 +1,11 @@
+{
+  "config": {
+    "auth_url": "https://KEYSTONE_URL:5000",
+    "project_name": "PROJECT_NAME",
+    "allowInsecureHttp": false
+  },
+  "secret": {
+    "username": "OPENSTACK_USER",
+    "password": "OPENSTACK_PASSWORD"
+  }
+}
