@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+package Sangfor_FW_V8095;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "miner/grpc-service/Sangfor_FW_V8095";
+
+service Sangfor_FW_V8095 {
+  rpc Login(LoginRequest) returns (ApiResponse) {}
+  rpc KeepAlive(TokenRequest) returns (ApiResponse) {}
+  rpc Logout(TokenRequest) returns (ApiResponse) {}
+
+  rpc ListBlackWhiteList(ListBlackWhiteListRequest) returns (ApiResponse) {}
+  rpc AddBlacklist(BlackListRequest) returns (ApiResponse) {}
+  rpc RemoveBlacklist(BlackListRequest) returns (ApiResponse) {}
+
+  rpc ListBlockedIP(ListBlockedIPRequest) returns (ApiResponse) {}
+  rpc BlockIP(BlockIPRequest) returns (ApiResponse) {}
+  rpc UnblockIP(UnblockIPRequest) returns (ApiResponse) {}
+
+  rpc GetBlockTime(TokenRequest) returns (ApiResponse) {}
+  rpc SetBlockTime(SetBlockTimeRequest) returns (ApiResponse) {}
+
+  rpc ListIPGroups(ListIPGroupsRequest) returns (ApiResponse) {}
+  rpc GetIPGroup(GetByNameRequest) returns (ApiResponse) {}
+  rpc AddIPGroup(IPGroupRequest) returns (ApiResponse) {}
+  rpc DeleteIPGroup(GetByNameRequest) returns (ApiResponse) {}
+
+  rpc BusinessBlockIP(BlockIPRequest) returns (ApiResponse) {}
+  rpc BusinessUnblockIP(UnblockIPRequest) returns (ApiResponse) {}
+
+  rpc QuerySessions(SessionQueryRequest) returns (ApiResponse) {}
+  rpc BlockSession(BlockSessionRequest) returns (ApiResponse) {}
+
+  rpc ListSecurityPolicies(ListSecurityPoliciesRequest) returns (ApiResponse) {}
+  rpc GetSecurityPolicy(GetByNameRequest) returns (ApiResponse) {}
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message TokenRequest {
+  string token = 1;
+}
+
+message ListBlackWhiteListRequest {
+  string token = 1;
+  string type = 2; // BLACK or WHITE. Defaults to BLACK.
+  string search = 3;
+  string url = 4;
+  int32 start = 5;
+  int32 length = 6;
+}
+
+message BlackListRequest {
+  string token = 1;
+  repeated string targets = 2; // IP, subnet, range, domain, or URL.
+  string description = 3;
+  bool enable = 4;
+  string override_mode = 5; // PROMPT, REPLACE, SKIP, SKIPBACK, or PROMPTALL.
+}
+
+message ListBlockedIPRequest {
+  string token = 1;
+  string search = 2;
+  int32 start = 3;
+  int32 length = 4;
+}
+
+message BlockIPRequest {
+  string token = 1;
+  repeated string src_ips = 2;
+  repeated string dst_ips = 3;
+  repeated string dns = 4;
+  repeated string urls = 5;
+  int32 dst_port = 6;
+  string block_time = 7; // For example 30m, 1h, or 3d.
+  string attack = 8; // Defaults to PLT-MANUAL.
+  string creator = 9; // Defaults to AF.
+}
+
+message UnblockIPItem {
+  string src_ip = 1;
+  string dst_ip = 2;
+  string dns = 3;
+  string url = 4;
+  int32 dst_port = 5;
+  string attack = 6; // Defaults to PLT-MANUAL.
+  string scope = 7; // GLOBAL or BUSINESS.
+}
+
+message UnblockIPRequest {
+  string token = 1;
+  repeated UnblockIPItem items = 2;
+}
+
+message SetBlockTimeRequest {
+  string token = 1;
+  string block_time = 2; // For example 30m, 1h, or 1d.
+}
+
+message GetByNameRequest {
+  string token = 1;
+  string name = 2;
+  string search = 3;
+}
+
+message ListIPGroupsRequest {
+  string token = 1;
+  string search = 2;
+  string name_prefix = 3;
+  int32 start = 4;
+  int32 length = 5;
+  string business_type = 6; // IP, BUSINESS, USER, ADDRGROUP, DOMAINS, ALL.
+  string address_type = 7; // IPV4, IPV6, or ALL.
+  string important = 8; // COMMON, CORE, or ALL.
+  string order = 9; // asc or desc.
+  string sort_by = 10;
+  string select = 11;
+  string has_ref = 12; // TRUE or FALSE.
+  string exclude_all = 13; // TRUE or FALSE.
+  string has_sensitive_data = 14; // TRUE, FALSE, or ALL.
+  string get_ref_by = 15;
+  bool exclude_oob_manage_peer_ip_group = 16;
+}
+
+message IPRange {
+  string start = 1;
+  string end = 2;
+  int32 bits = 3;
+}
+
+message IPGroupRequest {
+  string token = 1;
+  string name = 2;
+  string business_type = 3; // Defaults to IP.
+  string description = 4;
+  string address_type = 5; // Defaults to IPV4.
+  repeated IPRange ip_ranges = 6;
+  repeated string domains = 7;
+  string domains_detect_mode = 8; // ACTIVE or PASSIVE.
+  repeated string ref_ip_group = 9;
+  string important = 10; // COMMON or CORE.
+  string data_status = 11; // AUTO, EXIST, or NOT-EXIST.
+}
+
+message SessionQueryRequest {
+  string token = 1;
+  int32 start = 2;
+  int32 length = 3;
+  string private_offset = 4;
+  google.protobuf.Struct filter = 5;
+}
+
+message BlockSessionRequest {
+  string token = 1;
+  string src_ip = 2;
+  string dst_ip = 3;
+  int32 proto = 4;
+  int32 src_port = 5;
+  int32 dst_port = 6;
+}
+
+message ListSecurityPoliciesRequest {
+  string token = 1;
+  string search = 2;
+  int32 start = 3;
+  int32 length = 4;
+  string policy_type = 5; // SERVER or INTERNET_ACCESS.
+  string srcip = 6;
+  string dstip = 7;
+  string order = 8; // asc or desc.
+  string sort_by = 9;
+  string select = 10;
+}
+
+message ApiResponse {
+  int32 code = 1;
+  string message = 2;
+  google.protobuf.Value data = 3;
+  string token = 4;
+  string raw_json = 5;
+}
