@@ -1,0 +1,20 @@
+{
+  "method": "jianwei.vuln.service.AssetService/ListAssets",
+  "request": {
+    "count": "10",
+    "offset": "0"
+  },
+  "protocols": ["connect", "grpc", "mcp"],
+  "requireUpstreamPerProtocol": true,
+  "requireBusinessSuccess": true,
+  "upstream": {
+    "method": "POST",
+    "path": "/pedestal/rpc",
+    "headers": {
+      "authorization": "Bearer smoke-secret"
+    },
+    "body": {
+      "method": "AssetMgrService.IpAssetList"
+    }
+  }
+}

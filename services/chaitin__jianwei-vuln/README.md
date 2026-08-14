@@ -30,6 +30,11 @@ npm install
 > `baseUrl` should be the platform root URL (e.g. `https://your-jianwei-host`).
 > The `/insight` suffix, if present, is automatically stripped.
 > The API endpoint is at `/pedestal/rpc`, which is separate from the web UI.
+> HTTPS is required for remote hosts. Plain HTTP is accepted only for loopback test servers.
+
+To use a self-signed certificate in a private deployment, set `skipTlsVerify` to
+`true`. This is intentionally opt-in and disables certificate verification only
+for this service's upstream requests.
 
 ### secret
 ```json

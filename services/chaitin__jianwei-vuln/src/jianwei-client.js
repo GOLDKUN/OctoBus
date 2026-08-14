@@ -1,10 +1,7 @@
-/**
- * Jianwei Vulnerability Management Platform API Client
- *
- * Handles JSON-RPC 2.0 requests over HTTP POST to the Jianwei platform.
- * Uses Bearer token authentication and includes retry logic for transient failures.
- */
-/** Standard JSON-RPC 2.0 error codes. */
+/** Jianwei's JSON-RPC 2.0 transport. */
+import { Agent } from "undici";
+import { mapHttpStatusToCode, serviceError } from "@chaitin-ai/octobus-sdk";
+
 export const JSON_RPC_ERROR_CODES = {
     PARSE_ERROR: -32700,
     INVALID_REQUEST: -32600,
@@ -12,124 +9,166 @@ export const JSON_RPC_ERROR_CODES = {
     INVALID_PARAMS: -32602,
     INTERNAL_ERROR: -32603,
 };
+
 const DEFAULT_RETRY_OPTIONS = {
-    maxRetries: 3,
-    retryDelayMs: 1000,
+    maxRetries: 2,
+    retryDelayMs: 100,
     retryableStatusCodes: [429, 500, 502, 503, 504],
 };
-/**
- * Error thrown when a JSON-RPC response contains an error object.
- */
-export class JianweiRpcError extends Error {
-    code;
-    data;
-    constructor(error) {
-        super(`JSON-RPC error ${error.code}: ${error.message}`);
-        this.name = "JianweiRpcError";
-        this.code = error.code;
-        this.data = error.data;
-    }
-}
-/**
- * Error thrown when the HTTP request itself fails (non-2xx status, network error, etc.).
- */
-export class JianweiHttpError extends Error {
-    statusCode;
-    constructor(statusCode, message) {
-        super(`HTTP ${statusCode}: ${message}`);
-        this.name = "JianweiHttpError";
-        this.statusCode = statusCode;
-    }
-}
-let _insecureAgent;
+const DEFAULT_TIMEOUT_MS = 30_000;
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+
+let insecureAgent;
+
 function getInsecureAgent() {
-    if (!_insecureAgent) {
-        const { Agent } = require("undici");
-        _insecureAgent = new Agent({ connect: { rejectUnauthorized: false } });
-    }
-    return _insecureAgent;
+    insecureAgent ??= new Agent({ connect: { rejectUnauthorized: false } });
+    return insecureAgent;
 }
-/**
- * Client for the Jianwei Vulnerability Management Platform's JSON-RPC 2.0 API.
- *
- * When `skipTlsVerify` is true, an undici Agent with `rejectUnauthorized: false`
- * is used as the fetch dispatcher, allowing connections to servers with
- * self-signed certificates.
- */
-export class JianweiClient {
-    baseUrl;
-    token;
-    skipTlsVerify;
-    retryOptions;
-    nextId = 1;
-    constructor(baseUrl, token, options) {
-        this.baseUrl = baseUrl.replace(/\/+$/, "").replace(/\/insight\/?$/, "");
-        this.token = token;
-        this.skipTlsVerify = options?.skipTlsVerify ?? false;
-        this.retryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options?.retryOptions };
+
+function normalizeBaseUrl(baseUrl) {
+    let parsed;
+    try {
+        parsed = new URL(String(baseUrl ?? "").trim());
     }
-    async call(method, params = {}) {
-        const request = {
-            jsonrpc: "2.0",
-            method,
-            params,
-            id: this.nextId++,
-        };
-        const url = `${this.baseUrl}/pedestal/rpc`;
-        const fetchOptions = {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${this.token}`,
-            },
-            body: JSON.stringify(request),
-        };
-        if (this.skipTlsVerify) {
-            fetchOptions.dispatcher = getInsecureAgent();
+    catch {
+        throw serviceError("INVALID_ARGUMENT", "baseUrl must be an absolute URL");
+    }
+    const loopback = ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname);
+    if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback)) {
+        throw serviceError("INVALID_ARGUMENT", "baseUrl must use HTTPS (HTTP is allowed only for loopback testing)");
+    }
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+        throw serviceError("INVALID_ARGUMENT", "baseUrl must not contain credentials, query parameters, or fragments");
+    }
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "").replace(/\/insight$/, "");
+    return parsed.toString().replace(/\/$/, "");
+}
+
+function timeoutMs(value) {
+    if (value === undefined || value === null) {
+        return DEFAULT_TIMEOUT_MS;
+    }
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw serviceError("INVALID_ARGUMENT", "timeoutMs must be a positive integer");
+    }
+    return parsed;
+}
+
+function rpcErrorCode(error) {
+    switch (Number(error?.code)) {
+        case JSON_RPC_ERROR_CODES.INVALID_REQUEST:
+        case JSON_RPC_ERROR_CODES.INVALID_PARAMS:
+            return "INVALID_ARGUMENT";
+        case JSON_RPC_ERROR_CODES.METHOD_NOT_FOUND:
+            return "UNIMPLEMENTED";
+        case JSON_RPC_ERROR_CODES.PARSE_ERROR:
+            return "INTERNAL";
+        default:
+            return "INTERNAL";
+    }
+}
+
+function isTimeout(error) {
+    return error?.name === "AbortError" || error?.name === "TimeoutError";
+}
+
+async function readJson(response) {
+    const contentLength = Number(response.headers?.get?.("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
+        throw serviceError("RESOURCE_EXHAUSTED", "upstream response exceeds 4 MiB");
+    }
+    const text = await response.text();
+    if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) {
+        throw serviceError("RESOURCE_EXHAUSTED", "upstream response exceeds 4 MiB");
+    }
+    try {
+        return JSON.parse(text);
+    }
+    catch {
+        throw serviceError("INTERNAL", "upstream returned invalid JSON");
+    }
+}
+
+export class JianweiClient {
+    constructor(baseUrl, token, options = {}) {
+        this.baseUrl = normalizeBaseUrl(baseUrl);
+        this.token = String(token ?? "").trim();
+        if (!this.token) {
+            throw serviceError("UNAUTHENTICATED", "secret.token is required");
         }
-        let lastError = null;
-        for (let attempt = 0; attempt <= this.retryOptions.maxRetries; attempt++) {
+        this.skipTlsVerify = options.skipTlsVerify === true;
+        this.timeoutMs = timeoutMs(options.timeoutMs);
+        this.retryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retryOptions };
+        this.nextId = 1;
+    }
+
+    async call(method, params = {}) {
+        const deadline = Date.now() + this.timeoutMs;
+        let lastError;
+        for (let attempt = 0; attempt <= this.retryOptions.maxRetries; attempt += 1) {
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) {
+                throw serviceError("DEADLINE_EXCEEDED", `upstream request timed out after ${this.timeoutMs}ms`);
+            }
             try {
-                const response = await fetch(url, fetchOptions);
+                const response = await fetch(`${this.baseUrl}/pedestal/rpc`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${this.token}`,
+                    },
+                    body: JSON.stringify({ jsonrpc: "2.0", method, params, id: this.nextId++ }),
+                    signal: AbortSignal.timeout(remaining),
+                    dispatcher: this.skipTlsVerify ? getInsecureAgent() : undefined,
+                    redirect: "error",
+                });
                 if (!response.ok) {
-                    const isRetryable = this.retryOptions.retryableStatusCodes.includes(response.status);
-                    if (isRetryable && attempt < this.retryOptions.maxRetries) {
-                        lastError = new JianweiHttpError(response.status, `Request failed, retrying (attempt ${attempt + 1}/${this.retryOptions.maxRetries})`);
-                        await this.delay(this.retryOptions.retryDelayMs * Math.pow(2, attempt));
+                    const error = serviceError(mapHttpStatusToCode(response.status), `upstream returned HTTP ${response.status}`);
+                    if (this.isRetryable(response.status, attempt)) {
+                        lastError = error;
+                        await this.backoff(attempt, deadline);
                         continue;
                     }
-                    const body = await response.text().catch(() => "");
-                    throw new JianweiHttpError(response.status, body || response.statusText);
-                }
-                const json = await response.json();
-                if ("error" in json && json.error) {
-                    throw new JianweiRpcError(json.error);
-                }
-                return json.result;
-            }
-            catch (error) {
-                if (error instanceof JianweiRpcError) {
                     throw error;
                 }
-                if (error instanceof JianweiHttpError) {
-                    if (attempt < this.retryOptions.maxRetries && this.retryOptions.retryableStatusCodes.includes(error.statusCode)) {
-                        lastError = error;
-                        await this.delay(this.retryOptions.retryDelayMs * Math.pow(2, attempt));
-                        continue;
-                    }
+                const payload = await readJson(response);
+                if (payload?.error) {
+                    throw serviceError(rpcErrorCode(payload.error), `upstream JSON-RPC error ${String(payload.error.code ?? "unknown")}`);
+                }
+                if (!("result" in (payload ?? {}))) {
+                    throw serviceError("INTERNAL", "upstream JSON-RPC response is missing result");
+                }
+                return payload.result;
+            }
+            catch (error) {
+                if (isTimeout(error)) {
+                    throw serviceError("DEADLINE_EXCEEDED", `upstream request timed out after ${this.timeoutMs}ms`);
+                }
+                if (error?.legacyCode) {
                     throw error;
                 }
                 if (attempt < this.retryOptions.maxRetries) {
-                    lastError = error instanceof Error ? error : new Error(String(error));
-                    await this.delay(this.retryOptions.retryDelayMs * Math.pow(2, attempt));
+                    lastError = error;
+                    await this.backoff(attempt, deadline);
                     continue;
                 }
-                throw error instanceof Error ? error : new Error(String(error));
+                throw serviceError("UNAVAILABLE", "upstream request failed");
             }
         }
-        throw lastError ?? new Error("Max retries exceeded");
+        throw lastError ?? serviceError("UNAVAILABLE", "upstream request failed");
     }
-    delay(ms) {
-        return new Promise((resolve) => setTimeout(resolve, ms));
+
+    isRetryable(status, attempt) {
+        return attempt < this.retryOptions.maxRetries && this.retryOptions.retryableStatusCodes.includes(status);
+    }
+
+    async backoff(attempt, deadline) {
+        const delay = Math.min(this.retryOptions.retryDelayMs * (2 ** attempt), Math.max(deadline - Date.now(), 0));
+        if (delay > 0) {
+            await new Promise((resolve) => setTimeout(resolve, delay));
+        }
     }
 }
+
+export const _test = { normalizeBaseUrl, rpcErrorCode, timeoutMs };

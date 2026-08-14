@@ -1,9 +1,10 @@
 import { JianweiClient } from "./jianwei-client.js";
 function getClient(ctx) {
-    const config = ctx.config;
-    const secret = ctx.secret;
+    const config = ctx.config ?? {};
+    const secret = ctx.secret ?? {};
     return new JianweiClient(config.baseUrl, secret.token, {
         skipTlsVerify: config.skipTlsVerify,
+        timeoutMs: ctx.limits?.timeoutMs,
     });
 }
 function transformFilter(filter) {
