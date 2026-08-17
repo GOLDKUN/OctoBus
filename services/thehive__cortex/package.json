@@ -1,0 +1,13 @@
+{
+  "name": "cortex",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "cortex": "bin/cortex.js"
+  },
+  "dependencies": {
+    "@chaitin-ai/octobus-sdk": "^0.6.0",
+    "undici": "^7.16.0"
+  }
+}
