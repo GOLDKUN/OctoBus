@@ -251,13 +251,19 @@ const requireBindings = (ctx = {}) => {
   return { ...callCtx, bindings, host, cookie };
 };
 
-const decodeEntities = (s) => String(s)
-  .replace(/&amp;/g, '&')
-  .replace(/&lt;/g, '<')
-  .replace(/&gt;/g, '>')
-  .replace(/&quot;/g, '"')
-  .replace(/&#0?39;/g, "'")
-  .replace(/&nbsp;/g, ' ');
+const HTML_ENTITIES = Object.freeze({
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&#39;': "'",
+  '&#039;': "'",
+  '&nbsp;': ' ',
+});
+const decodeEntities = (s) => String(s).replace(
+  /&(amp|lt|gt|quot|#0?39|nbsp);/g,
+  (entity) => HTML_ENTITIES[entity],
+);
 
 // 从单个 <tr> 中按顺序取出带 title 的 <td> 文本。
 const rowTitles = (rowHtml) => {
@@ -275,8 +281,8 @@ const parseIpsLog = (html, limit = 0) => {
   let m;
   while ((m = rowRe.exec(html)) !== null) {
     const titles = rowTitles(m[1]);
-    if (titles.length < 13) continue;
-    if (!titles.some((v) => DATETIME_RE.test(v))) continue;
+    if (titles.length !== ENTRY_FIELDS.length) continue;
+    if (!DATETIME_RE.test(titles[6] ?? '')) continue;
     const entry = {};
     ENTRY_FIELDS.forEach((key, i) => { entry[key] = titles[i] ?? ''; });
     entries.push(entry);

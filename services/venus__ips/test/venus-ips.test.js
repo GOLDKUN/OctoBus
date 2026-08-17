@@ -249,6 +249,7 @@ test('helper coverage', () => {
   assert.equal(h.resolveCookie({ session_cookie: 'c' }), 'c');
   assert.equal(h.resolveCookie({ sessionCookie: 'c2' }), 'c2');
   assert.equal(h.decodeEntities('a&amp;b&lt;c&gt;&quot;&#39;&nbsp;d'), 'a&b<c>"\' d');
+  assert.equal(h.decodeEntities('&amp;lt; &amp;amp; &amp;quot;'), '&lt; &amp; &quot;');
   assert.equal(h.pickBoolean(true), true);
   assert.equal(h.pickBoolean(0), false);
   assert.equal(h.pickBoolean(undefined), undefined);
@@ -264,6 +265,14 @@ test('helper coverage', () => {
   assert.equal(parsed[0].time, '2026-01-02 03:04:05');
   // a row without a datetime is skipped
   assert.equal(h.parseIpsLog('<tr>' + Array.from({ length: 14 }, (_, i) => `<td title="x${i}">x</td>`).join('') + '</tr>').length, 0);
+  // Extra/missing titled cells and a datetime in the wrong column must not silently shift fields.
+  const titledCells = (count, timeIndex) => '<tr>' + Array.from(
+    { length: count },
+    (_, i) => `<td title="${i === timeIndex ? '2026-01-02 03:04:05' : `x${i}`}">x</td>`,
+  ).join('') + '</tr>';
+  assert.equal(h.parseIpsLog(titledCells(15, 7)).length, 0);
+  assert.equal(h.parseIpsLog(titledCells(13, 6)).length, 0);
+  assert.equal(h.parseIpsLog(titledCells(14, 5)).length, 0);
   // limit
   const two = '<tr>' + Array.from({ length: 14 }, (_, i) => `<td title="${i === 6 ? '2026-01-02 03:04:05' : 'a'}">a</td>`).join('') + '</tr>';
   assert.equal(h.parseIpsLog(two + two, 1).length, 1);
