@@ -1,0 +1,18 @@
+{
+  "method": "Elasticsearch_7_10_0.Elasticsearch_7_10_0/SearchDocuments",
+  "request": {"index": "smoke-index"},
+  "grpcRequest": {"index": "smoke-index", "size": 0},
+  "expectUpstream": true,
+  "requireBusinessSuccess": true,
+  "requireUpstreamPerProtocol": true,
+  "protocols": ["connect", "grpc"],
+  "upstream": {
+    "method": "POST",
+    "path": "/smoke-index/_search",
+    "body": {"size": 10}
+  },
+  "upstreamAll": [
+    {"method": "POST", "path": "/smoke-index/_search", "body": {"size": 10}},
+    {"method": "POST", "path": "/smoke-index/_search", "body": {"size": 0}}
+  ]
+}
