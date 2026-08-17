@@ -8,8 +8,8 @@
   "upstream": {
     "method": "GET",
     "path": "/userInfo",
-    "headers": {
-      "x-api-key": "smoke-secret"
+    "query": {
+      "api-key": "smoke-secret"
     }
   }
 }

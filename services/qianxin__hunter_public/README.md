@@ -20,7 +20,7 @@ Set the Hunter credential only in the instance secret:
 {"api_key":"REDACTED"}
 ```
 
-The service never accepts a credential from an RPC request, never logs the key or upstream response body, and sends the key in the `X-API-Key` header. It supports `skip_tls_verify` only through a per-request undici dispatcher; it does not alter global Node TLS state.
+The service never accepts a credential from an RPC request and never logs the key, the authenticated request URL, or the upstream response body. Hunter's public API requires the credential in its `api-key` query parameter; the implementation limits that unavoidable exposure to the upstream request and redacts credentials from returned data and errors. It supports `skip_tls_verify` only through a per-request undici dispatcher; it does not alter global Node TLS state.
 
 Methods:
 

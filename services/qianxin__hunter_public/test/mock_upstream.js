@@ -13,7 +13,7 @@ export async function createMockServer() {
       response.writeHead(status, { "content-type": "application/json", ...headers });
       response.end(JSON.stringify(payload));
     };
-    if (request.headers["x-api-key"] !== "test-key") return json(401, { code: 401, message: "bad key" });
+    if (url.searchParams.get("api-key") !== "test-key") return json(401, { code: 401, message: "bad key" });
     if (url.pathname === "/openApi/userInfo") return json(200, { code: 200, message: "ok", data: { type: "professional", rest_equity_point: 9 } });
     if (url.pathname === "/openApi/search") {
       if (!url.searchParams.get("search")) return json(400, { code: 400, message: "search required" });

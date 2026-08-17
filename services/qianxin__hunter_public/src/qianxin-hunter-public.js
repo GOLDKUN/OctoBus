@@ -16,7 +16,8 @@ export const DEFAULT_TIMEOUT_MS = 15_000;
 export const MAX_RETRIES = 2;
 export const MIN_REQUEST_INTERVAL_MS = 2_000;
 
-let lastRequestAt = 0;
+let rateLimitQueue = Promise.resolve();
+let nextRequestAt = 0;
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value ?? {}, key);
 
@@ -69,9 +70,17 @@ const base64urlEncode = (value) => Buffer.from(String(value), "utf8").toString("
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 async function waitForRateLimit() {
-  const remaining = MIN_REQUEST_INTERVAL_MS - (Date.now() - lastRequestAt);
-  if (lastRequestAt > 0 && remaining > 0) await sleep(remaining);
-  lastRequestAt = Date.now();
+  const previous = rateLimitQueue;
+  let release;
+  rateLimitQueue = new Promise((resolve) => { release = resolve; });
+  await previous;
+  try {
+    const remaining = nextRequestAt - Date.now();
+    if (remaining > 0) await sleep(remaining);
+    nextRequestAt = Date.now() + MIN_REQUEST_INTERVAL_MS;
+  } finally {
+    release();
+  }
 }
 
 const retryDelay = (response) => {
@@ -138,7 +147,10 @@ const validateUpstreamResult = (payload) => {
 
 async function callHunterAPI({ endpoint, params = new URLSearchParams(), method = "GET", fileContent, settings }) {
   const url = new URL(`${settings.apiBase}${endpoint}`);
-  const headers = { accept: "application/json", "x-api-key": settings.apiKey };
+  const headers = { accept: "application/json" };
+  // Hunter's public API accepts the credential only as the documented
+  // `api-key` query parameter. Never log or expose this URL in an error.
+  url.searchParams.set("api-key", settings.apiKey);
   let body;
 
   if (fileContent !== undefined) {
@@ -242,7 +254,10 @@ export const _test = {
   resolveSettings,
   responseFor,
   retryDelay,
-  resetRateLimit: () => { lastRequestAt = 0; },
+  resetRateLimit: () => {
+    rateLimitQueue = Promise.resolve();
+    nextRequestAt = 0;
+  },
   stringValue,
   validateUpstreamResult,
 };

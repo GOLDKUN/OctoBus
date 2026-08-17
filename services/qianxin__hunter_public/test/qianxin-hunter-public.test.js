@@ -34,7 +34,7 @@ test.afterEach(() => {
   _test.resetRateLimit();
 });
 
-test("all Hunter RPCs use the single-context SDK ABI, header credential, and correct request shapes", async () => {
+test("all Hunter RPCs use the single-context SDK ABI and the upstream request contract", async () => {
   const mock = await createMockServer();
   try {
     const ctx = context({ config: { api_base: mock.host } });
@@ -46,8 +46,8 @@ test("all Hunter RPCs use the single-context SDK ABI, header credential, and cor
     assert.equal(search.data.arr[0].ip, "203.0.113.9");
     assert.equal(batch.data.task_id, 7);
     assert.equal(mock.requests.length, 3);
-    assert.equal(mock.requests[0].headers["x-api-key"], "test-key");
-    assert.equal(mock.requests[0].query["api-key"], undefined);
+    assert.equal(mock.requests[0].query["api-key"], "test-key");
+    assert.equal(mock.requests[0].headers["x-api-key"], undefined);
     assert.equal(mock.requests[1].query.page, "2");
     assert.equal(Buffer.from(mock.requests[1].query.search, "base64url").toString(), 'ip="203.0.113.9"');
     assert.match(mock.requests[2].headers["content-type"], /multipart\/form-data/);
@@ -104,6 +104,20 @@ test("uses bounded iterative retries for 429 responses", async () => {
     (error) => error.legacyCode === "UNAVAILABLE",
   );
   assert.equal(calls, MAX_RETRIES + 1);
+});
+
+test("serializes concurrent calls through the process rate limiter", async () => {
+  const started = [];
+  globalThis.fetch = async () => {
+    started.push(Date.now());
+    return response(200, { code: 200, data: {} });
+  };
+  await Promise.all([
+    handlers[GET_USER_INFO_PATH.slice(1)](context()),
+    handlers[GET_USER_INFO_PATH.slice(1)](context()),
+  ]);
+  assert.equal(started.length, 2);
+  assert.ok(started[1] - started[0] >= 1_900, `requests were only ${started[1] - started[0]}ms apart`);
 });
 
 test("timeout, upstream business rejection, TLS option, and safe response redaction are covered", async () => {
