@@ -1,4 +1,17 @@
 import { JianweiClient } from "./jianwei-client.js";
+import { serviceError } from "@chaitin-ai/octobus-sdk";
+
+function integer(value, field, minimum = 0) {
+    const parsed = Number(value);
+    if (!Number.isSafeInteger(parsed) || parsed < minimum) {
+        throw serviceError("INVALID_ARGUMENT", `${field} must be a safe integer greater than or equal to ${minimum}`);
+    }
+    return parsed;
+}
+
+function integerList(values, field, minimum = 0) {
+    return values.map((value, index) => integer(value, `${field}[${index}]`, minimum));
+}
 function getClient(ctx) {
     const config = ctx.config ?? {};
     const secret = ctx.secret ?? {};
@@ -21,10 +34,12 @@ function transformFilter(filter) {
 function buildListParams(request) {
     const params = {};
     if (request.count !== undefined && request.count !== null) {
-        params.page_size = Number(request.count);
+        params.page_size = integer(request.count, "count", 1);
     }
     if (request.offset !== undefined && request.offset !== null) {
-        params.page = Math.floor(Number(request.offset) / Math.max(Number(request.count) || 10, 1)) + 1;
+        const offset = integer(request.offset, "offset");
+        const count = request.count === undefined || request.count === null ? 10 : integer(request.count, "count", 1);
+        params.page = Math.floor(offset / count) + 1;
     }
     const orderBy = request.orderBy || request.order_by;
     if (orderBy) {
@@ -50,9 +65,9 @@ const getAsset = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.id !== undefined && request.id !== null)
-        params.id = Number(request.id);
+        params.id = integer(request.id, "id");
     if (request.workflow_id !== undefined && request.workflow_id !== null)
-        params.workflow_id = Number(request.workflow_id);
+        params.workflow_id = integer(request.workflow_id, "workflow_id");
     const result = await client.call("AssetMgrService.IpAssetGet", params);
     return { data: result.data ?? {} };
 };
@@ -61,7 +76,7 @@ const updateAsset = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.id !== undefined && request.id !== null)
-        params.id = Number(request.id);
+        params.id = integer(request.id, "id");
     if (request.data)
         params.data = request.data;
     if (request.update_empty_col !== undefined)
@@ -74,17 +89,17 @@ const batchUpdateAssets = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.asset_ids)
-        params.asset_ids = request.asset_ids.map(Number);
+        params.asset_ids = integerList(request.asset_ids, "asset_ids");
     if (request.data)
         params.data = request.data;
     if (request.cascade_vuln !== undefined)
         params.cascade_vuln = request.cascade_vuln;
     if (request.conflict_strategy !== undefined)
-        params.conflict_strategy = Number(request.conflict_strategy);
+        params.conflict_strategy = integer(request.conflict_strategy, "conflict_strategy");
     if (request.update_empty_col !== undefined)
         params.update_empty_col = request.update_empty_col;
     const result = await client.call("AssetMgrService.IpAssetBatchUpdate", params);
-    return { duplicated: result.duplicated?.map(Number) ?? [] };
+    return { duplicated: result.duplicated ? integerList(result.duplicated, "upstream duplicated") : [] };
 };
 // ============================================================
 // VulnerabilityService handlers
@@ -108,7 +123,7 @@ const getVulnerabilityDetails = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.vuln_id !== undefined && request.vuln_id !== null)
-        params.id = Number(request.vuln_id);
+        params.id = integer(request.vuln_id, "vuln_id");
     if (request.workflow_id)
         params.workflow_id = request.workflow_id;
     const result = await client.call("ScanVulnIpService.SearchScanVulnIpDetail", params);
@@ -119,9 +134,9 @@ const updateVulnerabilityStatus = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.vuln_ids)
-        params.vuln_ids = request.vuln_ids.map(Number);
+        params.vuln_ids = integerList(request.vuln_ids, "vuln_ids");
     if (request.vuln_status !== undefined)
-        params.vuln_status = Number(request.vuln_status);
+        params.vuln_status = integer(request.vuln_status, "vuln_status");
     if (request.vuln_type)
         params.vuln_type = request.vuln_type;
     if (request.fix_remarks)
@@ -133,9 +148,9 @@ const updateVulnerabilityStatus = async (ctx) => {
     if (request.skip_end_status !== undefined)
         params.skip_end_status = request.skip_end_status;
     if (request.exposure_exec_id !== undefined)
-        params.exposure_exec_id = Number(request.exposure_exec_id);
+        params.exposure_exec_id = integer(request.exposure_exec_id, "exposure_exec_id");
     if (request.exposure_result_id)
-        params.exposure_result_id = request.exposure_result_id.map(Number);
+        params.exposure_result_id = integerList(request.exposure_result_id, "exposure_result_id");
     await client.call("ScanVulnIpService.UpsertScanVulnIp", params);
     return {};
 };
@@ -147,9 +162,9 @@ const directVulnDispose = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.vuln_ids)
-        params.vuln_ids = request.vuln_ids.map(Number);
+        params.vuln_ids = integerList(request.vuln_ids, "vuln_ids");
     if (request.vuln_status !== undefined)
-        params.vuln_status = Number(request.vuln_status);
+        params.vuln_status = integer(request.vuln_status, "vuln_status");
     if (request.vuln_type)
         params.vuln_type = request.vuln_type;
     if (request.fix_remarks)
@@ -161,9 +176,9 @@ const directVulnDispose = async (ctx) => {
     if (request.skip_end_status !== undefined)
         params.skip_end_status = request.skip_end_status;
     if (request.exposure_exec_id !== undefined)
-        params.exposure_exec_id = Number(request.exposure_exec_id);
+        params.exposure_exec_id = integer(request.exposure_exec_id, "exposure_exec_id");
     if (request.exposure_result_id)
-        params.exposure_result_id = request.exposure_result_id.map(Number);
+        params.exposure_result_id = integerList(request.exposure_result_id, "exposure_result_id");
     await client.call("ScanVulnIpService.UpsertScanVulnIp", params);
     return {};
 };
@@ -172,7 +187,7 @@ const vulnDisposeHistory = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.vuln_id !== undefined && request.vuln_id !== null)
-        params.id = Number(request.vuln_id);
+        params.id = integer(request.vuln_id, "vuln_id");
     if (request.vuln_type)
         params.vuln_type = request.vuln_type;
     const result = await client.call("ScanVulnIpService.SearchScanVulnIpDetail", params);
@@ -187,7 +202,7 @@ const saveVulnWorkflowStatus = async (ctx) => {
     if (request.status_map) {
         const statusMap = {};
         for (const [key, value] of Object.entries(request.status_map)) {
-            statusMap[key] = { ids: value.ids?.map(Number) ?? [] };
+            statusMap[key] = { ids: value.ids ? integerList(value.ids, `status_map.${key}.ids`) : [] };
         }
         params.status_map = statusMap;
     }
@@ -209,7 +224,7 @@ const getIPIntelligenceDetail = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.id !== undefined && request.id !== null)
-        params.id = Number(request.id);
+        params.id = integer(request.id, "id");
     const result = await client.call("IntelligenceService.GetIPIntelligenceDetail", params);
     return { data: result.data ?? {} };
 };
@@ -225,7 +240,7 @@ const getDomainIntelligenceDetail = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.id !== undefined && request.id !== null)
-        params.id = Number(request.id);
+        params.id = integer(request.id, "id");
     const result = await client.call("IntelligenceService.GetDomainIntelligenceDetail", params);
     return { data: result.data ?? {} };
 };
@@ -253,7 +268,7 @@ const getStandardVulnDetailByID = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.id !== undefined && request.id !== null)
-        params.id = Number(request.id);
+        params.id = integer(request.id, "id");
     const result = await client.call("KBService.GetStandardVulnDetailByID", params);
     return { detail: result.detail ?? {} };
 };
@@ -282,7 +297,7 @@ const deleteCustomizeTag = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.id !== undefined && request.id !== null)
-        params.id = Number(request.id);
+        params.id = integer(request.id, "id");
     await client.call("KBService.DeleteCustomizeTag", params);
     return {};
 };
@@ -291,7 +306,7 @@ const appendCustomizeTags = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.vuln_id !== undefined && request.vuln_id !== null)
-        params.vuln_id = Number(request.vuln_id);
+        params.vuln_id = integer(request.vuln_id, "vuln_id");
     if (request.tag_names)
         params.tag_names = request.tag_names;
     await client.call("KBService.AppendCustomizeTags", params);
@@ -302,7 +317,7 @@ const replaceCustomizeTags = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.vuln_id !== undefined && request.vuln_id !== null)
-        params.vuln_id = Number(request.vuln_id);
+        params.vuln_id = integer(request.vuln_id, "vuln_id");
     if (request.tag_names)
         params.tag_names = request.tag_names;
     await client.call("KBService.ReplaceCustomizeTags", params);
@@ -316,7 +331,7 @@ const checkScanDeviceAuth = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.device_id !== undefined && request.device_id !== null)
-        params.device_id = Number(request.device_id);
+        params.device_id = integer(request.device_id, "device_id");
     if (request.env_map)
         params.env_map = request.env_map;
     await client.call("ScanDeviceService.CheckScanDeviceAuth", params);
@@ -327,13 +342,13 @@ const createDevice = async (ctx) => {
     const request = ctx.request;
     const params = { ...request };
     if (params.organization_id !== undefined)
-        params.organization_id = Number(params.organization_id);
+        params.organization_id = integer(params.organization_id, "organization_id");
     if (params.owner_id !== undefined)
-        params.owner_id = Number(params.owner_id);
+        params.owner_id = integer(params.owner_id, "owner_id");
     if (params.security_scope_id !== undefined)
-        params.security_scope_id = Number(params.security_scope_id);
+        params.security_scope_id = integer(params.security_scope_id, "security_scope_id");
     if (params.logo_file_id !== undefined)
-        params.logo_file_id = Number(params.logo_file_id);
+        params.logo_file_id = integer(params.logo_file_id, "logo_file_id");
     const result = await client.call("ScanDeviceService.CreateDevice", params);
     return { result: result.result ?? {} };
 };
@@ -342,7 +357,7 @@ const removeScanDevice = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.device_id !== undefined && request.device_id !== null)
-        params.device_id = Number(request.device_id);
+        params.device_id = integer(request.device_id, "device_id");
     await client.call("ScanDeviceService.RemoveScanDevice", params);
     return {};
 };
@@ -364,7 +379,7 @@ const getVulnVptScore = async (ctx) => {
     const request = ctx.request;
     const params = {};
     if (request.vuln_ids)
-        params.vuln_ids = request.vuln_ids.map(Number);
+        params.vuln_ids = integerList(request.vuln_ids, "vuln_ids");
     if (request.vuln_type)
         params.vuln_type = request.vuln_type;
     const result = await client.call("ScanVulnIpService.GetVulnVptScore", params);

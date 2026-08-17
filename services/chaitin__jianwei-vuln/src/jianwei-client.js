@@ -112,13 +112,14 @@ export class JianweiClient {
                 throw serviceError("DEADLINE_EXCEEDED", `upstream request timed out after ${this.timeoutMs}ms`);
             }
             try {
+                const requestId = this.nextId++;
                 const response = await fetch(`${this.baseUrl}/pedestal/rpc`, {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
                         Authorization: `Bearer ${this.token}`,
                     },
-                    body: JSON.stringify({ jsonrpc: "2.0", method, params, id: this.nextId++ }),
+                    body: JSON.stringify({ jsonrpc: "2.0", method, params, id: requestId }),
                     signal: AbortSignal.timeout(remaining),
                     dispatcher: this.skipTlsVerify ? getInsecureAgent() : undefined,
                     redirect: "error",
@@ -133,6 +134,9 @@ export class JianweiClient {
                     throw error;
                 }
                 const payload = await readJson(response);
+                if (payload?.jsonrpc !== "2.0" || payload?.id !== requestId) {
+                    throw serviceError("INTERNAL", "upstream returned a mismatched JSON-RPC response");
+                }
                 if (payload?.error) {
                     throw serviceError(rpcErrorCode(payload.error), `upstream JSON-RPC error ${String(payload.error.code ?? "unknown")}`);
                 }

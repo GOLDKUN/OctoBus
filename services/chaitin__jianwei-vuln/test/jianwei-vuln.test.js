@@ -101,6 +101,15 @@ test("all RPC handlers safely normalize empty requests and empty upstream result
     }
 });
 
+test("handlers reject malformed or precision-losing integer fields", async () => {
+    const invoke = (path, request) => handlers[`${prefix}.${path}`](context(request));
+    await assert.rejects(invoke("AssetService/GetAsset", { id: "not-an-id" }), (error) => error.legacyCode === "INVALID_ARGUMENT");
+    await assert.rejects(invoke("AssetService/GetAsset", { id: "9007199254740992" }), (error) => error.legacyCode === "INVALID_ARGUMENT");
+    await assert.rejects(invoke("AssetService/ListAssets", { count: "0", offset: "0" }), (error) => error.legacyCode === "INVALID_ARGUMENT");
+    await assert.rejects(invoke("AssetService/ListAssets", { count: "10", offset: "-1" }), (error) => error.legacyCode === "INVALID_ARGUMENT");
+    await assert.rejects(invoke("VulnerabilityService/UpdateVulnerabilityStatus", { vuln_ids: ["1", "bad"] }), (error) => error.legacyCode === "INVALID_ARGUMENT");
+});
+
 test("client uses secure defaults, bounded requests, and typed errors", async (t) => {
     await t.test("normalizes only safe base URLs", () => {
         assert.equal(clientTest.normalizeBaseUrl("https://jianwei.example.test/insight/"), "https://jianwei.example.test");
@@ -124,7 +133,7 @@ test("client uses secure defaults, bounded requests, and typed errors", async (t
     await t.test("maps HTTP, JSON-RPC, and timeout failures to SDK errors", async () => {
         globalThis.fetch = async () => response({}, 401);
         await assert.rejects(new JianweiClient("http://127.0.0.1:18080", "token", { retryOptions: { maxRetries: 0 } }).call("test.method"), (error) => error.legacyCode === "UNAUTHENTICATED");
-        globalThis.fetch = async () => response({ error: { code: -32602 } });
+        globalThis.fetch = async () => response({ jsonrpc: "2.0", id: 1, error: { code: -32602 } });
         await assert.rejects(new JianweiClient("http://127.0.0.1:18080", "token", { retryOptions: { maxRetries: 0 } }).call("test.method"), (error) => error.legacyCode === "INVALID_ARGUMENT");
         globalThis.fetch = async () => { throw new DOMException("expired", "TimeoutError"); };
         await assert.rejects(new JianweiClient("http://127.0.0.1:18080", "token", { retryOptions: { maxRetries: 0 } }).call("test.method"), (error) => error.legacyCode === "DEADLINE_EXCEEDED");
@@ -133,7 +142,7 @@ test("client uses secure defaults, bounded requests, and typed errors", async (t
         let calls = 0;
         globalThis.fetch = async () => {
             calls += 1;
-            return calls === 1 ? response({}, 503) : response({ result: { recovered: true } });
+            return calls === 1 ? response({}, 503) : response({ jsonrpc: "2.0", id: 2, result: { recovered: true } });
         };
         const result = await new JianweiClient("http://127.0.0.1:18080", "token", {
             retryOptions: { maxRetries: 1, retryDelayMs: 0 },
@@ -145,6 +154,8 @@ test("client uses secure defaults, bounded requests, and typed errors", async (t
         assert.throws(() => new JianweiClient("http://127.0.0.1:18080", "", {}), (error) => error.legacyCode === "UNAUTHENTICATED");
         assert.throws(() => new JianweiClient("http://127.0.0.1:18080", "token", { timeoutMs: 0 }), (error) => error.legacyCode === "INVALID_ARGUMENT");
         globalThis.fetch = async () => response({ jsonrpc: "2.0" });
+        await assert.rejects(new JianweiClient("http://127.0.0.1:18080", "token", { retryOptions: { maxRetries: 0 } }).call("test.method"), (error) => error.legacyCode === "INTERNAL");
+        globalThis.fetch = async () => response({ jsonrpc: "2.0", id: 99, result: {} });
         await assert.rejects(new JianweiClient("http://127.0.0.1:18080", "token", { retryOptions: { maxRetries: 0 } }).call("test.method"), (error) => error.legacyCode === "INTERNAL");
         globalThis.fetch = async () => ({ ...response({}, 200), text: async () => "not-json" });
         await assert.rejects(new JianweiClient("http://127.0.0.1:18080", "token", { retryOptions: { maxRetries: 0 } }).call("test.method"), (error) => error.legacyCode === "INTERNAL");
