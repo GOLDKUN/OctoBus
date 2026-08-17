@@ -579,7 +579,7 @@ function mapClient(raw) {
     description: raw.description ?? raw.desc ?? "",
     redirectUris: raw.redirectUris ?? raw.redirect_uris ?? raw.redirects ?? [],
     grantTypes: raw.grantTypes ?? raw.grant_types ?? [],
-    scopes: raw.scopes ?? raw.scope ? [raw.scope] : [],
+    scopes: raw.scopes ?? (raw.scope ? [raw.scope] : []),
     status: raw.status ?? raw.state ?? "",
     createTime: raw.createTime ?? raw.create_time ?? raw.created ?? "",
   };

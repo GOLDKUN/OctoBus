@@ -2,6 +2,8 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 
 import { service } from "../src/service.js";
+import { createSign, isSignExpired } from "../src/sangfor-sign.js";
+import { resolveAccessKey, resolveBaseUrl, resolveSecretKey, signedRequest } from "../src/xdr-client.js";
 import { MockXdrServer } from "./mock_upstream.js";
 
 const mock = new MockXdrServer();
@@ -186,5 +188,116 @@ describe("ThreatExpertService", () => {
     const result = await service.handlers["sangfor_xdr.ThreatExpertService/GetProductInfo"]({}, makeCtx());
     assert.strictEqual(result.productName, "Sangfor XDR");
     assert.strictEqual(result.apiVersion, "v3");
+  });
+});
+
+describe("complete handler and client coverage", () => {
+  it("invokes every declared handler with representative upstream data", async () => {
+    const originalFetch = globalThis.fetch;
+    const item = {
+      id: "id-1", uuid: "uuid-1", assetId: "asset-1", aid: "asset-1",
+      name: "sample", hostname: "host-1", ip: "192.0.2.1", severity: "high",
+      status: "open", count: 1, total: 1, key: "key", value: "value",
+      fields: [{ fieldName: "field", fieldValue: "value", fieldType: "string" }],
+      attributes: {}, attrs: {}, entities: [], proofs: [],
+    };
+    const payload = {
+      ...item,
+      success: true, code: 0, message: "ok", taskId: "task-1",
+      page: 1, pageSize: 20, items: [item], list: [item], data: [item],
+      points: [item], groups: [item], assets: [item], counts: [item], tabs: [{ ...item, entities: [item] }],
+      advices: [item], priorities: [item], typeCounts: [item], changes: [item],
+      redirectUris: ["https://example.invalid/callback"], grantTypes: ["client_credentials"],
+      scopes: ["read"], permissions: ["read"], features: {}, rawData: {}, result: {},
+      access_token: "token", token_type: "Bearer", expires_in: 3600,
+    };
+    let upstreamPayload = payload;
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(upstreamPayload),
+    });
+    const request = {
+      page: 1, pageSize: 20, keyword: "sample", assetId: "asset-1", assetIds: ["asset-1"],
+      aid: "asset-1", branchId: "branch-1", branchIds: ["branch-1"], groupId: "group-1",
+      groupIds: ["group-1"], groupType: "default", ip: "192.0.2.1", ipList: ["192.0.2.1"],
+      ips: ["192.0.2.1"], uuid: "uuid-1", alertId: "alert-1", taskId: "task-1",
+      riskId: "risk-1", personId: "person-1", clientId: "client-1", name: "client",
+      fileHashes: ["abc"], deviceIds: ["device-1"], detailType: "asset", entityType: "host",
+      dimension: "severity", type: "asset", id: "id-1", req: "value",
+    };
+    try {
+      for (const [name, handler] of Object.entries(service.handlers)) {
+        const result = await handler(request, makeCtx());
+        assert.ok(result && typeof result === "object", `${name} must return an object`);
+      }
+      upstreamPayload = {};
+      for (const [name, handler] of Object.entries(service.handlers)) {
+        const result = await handler({}, makeCtx());
+        assert.ok(result && typeof result === "object", `${name} must handle an empty response`);
+      }
+      const alternate = {
+        riskId: "risk-2", vulnId: "vuln-2", title: "alternate", computerName: "host-2",
+        innerIp: "192.0.2.2", macAddr: "00:00:5e:00:53:01", level: "medium", state: "closed",
+        branchName: "branch", groupName: "group", owner: "owner", dept: "IT", onlineStatus: "online",
+        vulnerabilityCount: 2, alarmCount: 3, srcIp: "192.0.2.3", dstIp: "192.0.2.4",
+        deviceName: "device", desc: "description", occurTime: "now", count: 1,
+        fields: [], attributes: {}, entities: [], proofs: [],
+      };
+      upstreamPayload = {
+        ...alternate, total: 1, list: [alternate], items: [alternate], data: [alternate],
+        points: [alternate], groups: [alternate], assets: [alternate], counts: [alternate],
+        tabs: [{ ...alternate, entities: [alternate] }], advices: [alternate], priorities: [alternate],
+        typeCounts: [alternate], changes: [alternate], success: false, code: 0,
+      };
+      for (const [name, handler] of Object.entries(service.handlers)) {
+        const result = await handler(request, makeCtx());
+        assert.ok(result && typeof result === "object", `${name} must map alternate response fields`);
+      }
+      upstreamPayload = { scope: "read" };
+      const scopedClient = await service.handlers["sangfor_xdr.AuthService/GetClient"]({ clientId: "client-1" }, makeCtx());
+      assert.deepStrictEqual(scopedClient.scopes, ["read"]);
+      const runtimeResult = await service.handlers["sangfor_xdr.AssetService/ListAssets"]({
+        request: { page: 1, pageSize: 20 },
+        ...makeCtx(),
+      });
+      assert.strictEqual(runtimeResult.page, 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("validates configuration, credentials, signing, and upstream failures", async () => {
+    assert.strictEqual(resolveBaseUrl({ endpoint: { value: "https://xdr.example/" } }), "https://xdr.example");
+    assert.strictEqual(resolveAccessKey({ ak: { value: "ak" } }), "ak");
+    assert.strictEqual(resolveSecretKey({ sk: { value: "sk" } }), "sk");
+    assert.throws(() => resolveBaseUrl({}), /required/);
+    assert.throws(() => resolveAccessKey({}), /required/);
+    assert.throws(() => resolveSecretKey({}), /required/);
+
+    const signed = createSign({ ak: "ak", sk: "sk", method: "get", uri: "/api", queryString: "b=2&a=1", host: "xdr.example", payload: "{}", headers: { "x-extra": "yes" } });
+    assert.match(signed.Authorization, /HMAC-SHA256/);
+    assert.strictEqual(isSignExpired({}), true);
+    assert.strictEqual(isSignExpired({ "sign-date": "20000101T000000Z" }), true);
+
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async () => { throw new Error("offline"); };
+      await assert.rejects(signedRequest({ config: { endpoint: "https://xdr.example" }, secret: { ak: "ak", sk: "sk" }, method: "GET", path: "/api" }), /UNAVAILABLE/);
+
+      globalThis.fetch = async () => ({ ok: false, status: 403, text: async () => '{"error":"denied"}' });
+      await assert.rejects(signedRequest({ config: { endpoint: "https://xdr.example" }, secret: { ak: "ak", sk: "sk" }, method: "POST", path: "/api", body: { key: "value" } }), /PERMISSION_DENIED/);
+
+      globalThis.fetch = async () => ({ ok: false, status: 429, text: async () => "rate limited" });
+      await assert.rejects(signedRequest({ config: { endpoint: "https://xdr.example" }, secret: { ak: "ak", sk: "sk" }, method: "GET", path: "/api" }), /INVALID_ARGUMENT/);
+
+      globalThis.fetch = async () => ({ ok: false, status: 500, text: async () => "server error" });
+      await assert.rejects(signedRequest({ config: { endpoint: "https://xdr.example" }, secret: { ak: "ak", sk: "sk" }, method: "GET", path: "/api" }), /UNAVAILABLE/);
+
+      globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => { throw new Error("read failed"); } });
+      await assert.rejects(signedRequest({ config: { endpoint: "https://xdr.example" }, secret: { ak: "ak", sk: "sk" }, method: "GET", path: "/api" }), /UNAVAILABLE/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

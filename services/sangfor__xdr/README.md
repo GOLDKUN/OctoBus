@@ -162,3 +162,10 @@ npm run validate -- --service-dir sangfor__xdr
 npm test -- --service-dir sangfor__xdr --coverage
 npm run pack:check
 ```
+
+These automated tests and the OctoBus Connect/gRPC/MCP smoke test use a local
+mock HTTP upstream. They validate signing, routing, response mapping, errors,
+and the complete OctoBus protocol chain; they are not evidence of compatibility
+with a physical Sangfor XDR appliance. Firmware-specific and live-device
+compatibility remain pending until sanitized customer-site results are
+available.

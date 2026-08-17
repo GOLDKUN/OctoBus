@@ -16,12 +16,12 @@ const unwrapString = (value) => {
 };
 
 export const resolveBaseUrl = (config = {}) => {
-  const raw = firstDefined(
-    unwrapString(config.xdrBaseUrl),
-    unwrapString(config.endpoint),
-    unwrapString(config.restBaseUrl),
-    unwrapString(config.baseUrl),
-  ).trim().replace(/\/+$/, "");
+  const raw = unwrapString(firstDefined(
+    config.xdrBaseUrl,
+    config.endpoint,
+    config.restBaseUrl,
+    config.baseUrl,
+  )).trim().replace(/\/+$/, "");
   if (!raw) throw new Error("xdrBaseUrl/endpoint is required in config");
   return raw;
 };

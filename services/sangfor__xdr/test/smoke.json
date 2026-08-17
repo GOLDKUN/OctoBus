@@ -1,0 +1,10 @@
+{
+  "method": "sangfor_xdr.AssetService/ListAssets",
+  "request": {
+    "page": 1,
+    "pageSize": 20
+  },
+  "protocols": ["connect", "grpc", "mcp"],
+  "expectUpstream": true,
+  "requireUpstreamPerProtocol": true
+}
