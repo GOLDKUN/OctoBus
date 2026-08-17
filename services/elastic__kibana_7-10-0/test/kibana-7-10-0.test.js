@@ -126,6 +126,7 @@ test('BulkGetSavedObjects batch-fetches objects', async () => {
     assert.equal(result.saved_objects.length, 2);
     assert.equal(result.saved_objects[0].type, 'dashboard');
     assert.equal(result.saved_objects[0].version, 'WzEsMV0=');
+    assert.equal(JSON.parse(result.saved_objects[0].raw_body).id, 'obj-1');
   } finally { await mock.close(); }
 });
 
@@ -274,7 +275,8 @@ test('base URLs with credentials, queries, or fragments are rejected and log URL
   assert.equal(_test.resolveTimeoutMs({ bindings: { timeoutMs: 0 } }), 5000);
   assert.equal(_test.resolveMaxResponseBytes({ bindings: { maxResponseBytes: -1 } }), 4 * 1024 * 1024);
   assert.equal(_test.resolveMaxResponseBytes({ bindings: { maxResponseBytes: 99 * 1024 * 1024 } }), 16 * 1024 * 1024);
-  assert.equal(_test.shouldSkipTlsVerify({ skipTlsVerify: 'false', insecureSkipVerify: true }), false);
+  assert.equal(_test.shouldSkipTlsVerify({ skipTlsVerify: 'false', insecureSkipVerify: true }), true);
+  assert.equal(_test.shouldSkipTlsVerify({ skipTlsVerify: false, tlsInsecureSkipVerify: false, insecureSkipVerify: 'off' }), false);
   assert.equal(_test.shouldSkipTlsVerify({ tlsInsecureSkipVerify: true }), true);
   assert.equal(_test.shouldSkipTlsVerify({ insecureSkipVerify: 'on' }), true);
   assert.deepEqual(await _test.buildTlsOptions({ skipTlsVerify: false }), {});

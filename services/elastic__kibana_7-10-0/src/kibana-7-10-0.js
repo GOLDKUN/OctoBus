@@ -128,11 +128,11 @@ const resolveMaxResponseBytes = (ctx = {}) => {
   return Math.min(Math.trunc(raw), MAX_RESPONSE_BYTES);
 };
 
-const shouldSkipTlsVerify = (bindings = {}) => toBool(firstDefined(
+const shouldSkipTlsVerify = (bindings = {}) => [
   bindings.skipTlsVerify,
   bindings.tlsInsecureSkipVerify,
   bindings.insecureSkipVerify,
-), false);
+].some((value) => value !== undefined && toBool(value, false));
 
 const createTlsDispatcher = async (skipTlsVerify) => {
   if (!skipTlsVerify) return undefined;
@@ -489,7 +489,7 @@ const handleBulkGetSavedObjects = async (req = {}, ctx = {}) => {
     created_at: toTrimmedString(firstDefined(so?.created_at, so?.createdAt)),
     attributes_json: toJsonString(so?.attributes),
     references: (Array.isArray(so?.references) ? so.references : []).map((r) => ({ name: toTrimmedString(r?.name), type: toTrimmedString(r?.type), id: toTrimmedString(r?.id) })),
-    raw_body: '',
+    raw_body: toJsonString(so),
     migration_version: toJsonString(so?.migrationVersion),
     core_migration_version: toTrimmedString(firstDefined(so?.coreMigrationVersion, so?._coreMigrationVersion)),
   }));
