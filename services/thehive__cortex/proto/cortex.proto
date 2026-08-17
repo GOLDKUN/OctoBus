@@ -27,9 +27,8 @@ service TheHive_CORTEX {
 // ==================== ListAnalyzers ====================
 
 message ListAnalyzersRequest {
-  string username = 1;                          // Cortex 用户名，可选（优先用 secret）
-  string password = 2;                          // Cortex 密码，可选（优先用 secret）
-  string api_key = 3;                           // Cortex API Key，可选（优先于 Basic Auth）
+  reserved 1, 2;
+  string api_key = 3;                           // Cortex API Key，可选（优先用 secret）
   string data_type = 4;                         // observable 类型过滤，可选（ip/domain/url/hash/file/mail/fqdn/other/uri/autonomous-system/path/filename）
 }
 
@@ -58,8 +57,7 @@ message AnalyzerRecord {
 // ==================== AnalyzeObservable ====================
 
 message AnalyzeObservableRequest {
-  string username = 1;                          // Cortex 用户名，可选
-  string password = 2;                          // Cortex 密码，可选
+  reserved 1, 2;
   string api_key = 3;                           // Cortex API Key，可选
   string analyzer_id = 4;                       // 分析器 ID（必填，如 "VirusTotal_3_0_XXX"）
   string data = 5;                              // observable 值（必填，如 "8.8.8.8"）
@@ -94,8 +92,7 @@ message JobData {
 // ==================== GetJobReport ====================
 
 message GetJobReportRequest {
-  string username = 1;                          // Cortex 用户名，可选
-  string password = 2;                          // Cortex 密码，可选
+  reserved 1, 2;
   string api_key = 3;                           // Cortex API Key，可选
   string job_id = 4;                            // 任务 ID（必填）
 }
@@ -131,8 +128,7 @@ message ArtifactRecord {
 // ==================== ListJobs ====================
 
 message ListJobsRequest {
-  string username = 1;                          // Cortex 用户名，可选
-  string password = 2;                          // Cortex 密码，可选
+  reserved 1, 2;
   string api_key = 3;                           // Cortex API Key，可选
   string data_type = 4;                         // observable 类型过滤，可选
   string data = 5;                              // observable 值过滤，可选
@@ -153,8 +149,7 @@ message JobListResult {
 // ==================== GetJobStatus ====================
 
 message GetJobStatusRequest {
-  string username = 1;                          // Cortex 用户名，可选
-  string password = 2;                          // Cortex 密码，可选
+  reserved 1, 2;
   string api_key = 3;                           // Cortex API Key，可选
   string job_id = 4;                            // 单个任务 ID，可选（与 job_ids 互斥）
   repeated string job_ids = 5;                  // 批量任务 ID 列表，可选

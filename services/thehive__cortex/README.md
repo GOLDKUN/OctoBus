@@ -13,7 +13,7 @@ octobus service import --id cortex ./services/thehive__cortex
 - `service.json`: OctoBus service manifest.
 - `proto/cortex.proto`: gRPC API definition.
 - `config.schema.json`: non-secret endpoint, headers, and timeout settings.
-- `secret.schema.json`: Cortex API key or Basic Auth credentials.
+- `secret.schema.json`: Cortex API key.
 - `src/cortex.js`: Cortex REST proxy implementation.
 - `src/service.js`: OctoBus SDK `defineService` wrapper.
 - `bin/cortex.js`: service-local executable entrypoint.
@@ -34,7 +34,8 @@ Use `endpoint` for the Cortex REST API base URL. Legacy aliases `restBaseUrl`, `
 }
 ```
 
-Cortex supports two authentication methods. Use `secret.apiKey` for Bearer token auth (preferred), or `secret.username`/`secret.password` for Basic Auth (fallback):
+Cortex REST integrations use an API key as a Bearer token. Generate a key for
+the service account in Cortex, then set `secret.apiKey`:
 
 ```json
 {
@@ -42,16 +43,9 @@ Cortex supports two authentication methods. Use `secret.apiKey` for Bearer token
 }
 ```
 
-or:
-
-```json
-{
-  "username": "admin",
-  "password": "secret"
-}
-```
-
-Request-level `api_key` takes precedence over secret-level `apiKey`, which takes precedence over `username`/`password` Basic Auth.
+Request-level `api_key` takes precedence over secret-level `apiKey`. Cortex's
+local username/password login creates a browser session; it is not HTTP Basic
+authentication and is therefore intentionally not accepted by this adapter.
 
 ## RPC Methods
 
@@ -97,7 +91,7 @@ Cortex supports the following observable `data_type` values:
 - `GetJobReport` calls `GET /api/job/:jobId/report` and maps the response to structured `summary`, `full`, `operations`, and `artifacts` fields.
 - `ListJobs` calls `GET /api/job` with query parameters `dataTypeFilter`, `dataFilter`, `analyzerFilter`, `range`.
 - `GetJobStatus` calls `GET /api/job/:jobId`; batch requests aggregate one such documented lookup per job ID.
-- Auth priority: request `api_key` → secret `apiKey` (Bearer) → secret `username`/`password` (Basic).
+- Auth priority: request `api_key` → secret `apiKey` (Bearer).
 - TLS certificate verification is always enabled. For private CAs, install the CA in the runtime trust store (for Node, `NODE_EXTRA_CA_CERTS` is supported).
 - Redirects are rejected to prevent credentials being forwarded to another origin.
 - Responses are limited to 4 MiB.

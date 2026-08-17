@@ -272,6 +272,8 @@ test('ListAnalyzers sends GET and maps response', async () => {
   assert.match(captured.url, /\/api\/analyzer$/);
   assert.equal(captured.init.method, 'GET');
   assert.equal(captured.init.headers['Authorization'], 'Bearer test-key');
+  assert.equal(Object.hasOwn(res, 'err'), false);
+  assert.equal(Object.hasOwn(res, 'msg'), false);
   assert.equal(res.data.analyzers.length, 2);
   assert.equal(res.data.analyzers[0].id, 'vt1');
   assert.equal(res.data.analyzers[0].name, 'VirusTotal_3_0');
@@ -293,17 +295,17 @@ test('ListAnalyzers with dataType filter uses /api/analyzer/type/:dataType', asy
   });
 
   const handler = await loadHandler(listAnalyzersPath, { data_type: 'ip' }, {
-    secret: { username: 'admin', password: 'secret' },
+    secret: { apiKey: 'test-key' },
   });
   const res = await handler();
 
   assert.match(captured.url, /\/api\/analyzer\/type\/ip/);
   assert.equal(captured.init.method, 'GET');
-  assert.match(captured.init.headers['Authorization'], /^Basic /);
+  assert.equal(captured.init.headers['Authorization'], 'Bearer test-key');
   assert.equal(res.data.analyzers.length, 1);
 });
 
-test('Basic Auth supports Unicode credentials and fetch uses secure transport options', async () => {
+test('requests without an API key remain unauthenticated and use secure transport options', async () => {
   let captured;
   setFetch(async (url, init) => {
     captured = { url, init };
@@ -315,15 +317,10 @@ test('Basic Auth supports Unicode credentials and fetch uses secure transport op
     };
   });
 
-  const handler = await loadHandler(listAnalyzersPath, {}, {
-    secret: { username: '用户', password: '密码🔐' },
-  });
+  const handler = await loadHandler(listAnalyzersPath, {});
   await handler();
 
-  assert.equal(
-    captured.init.headers.Authorization,
-    `Basic ${Buffer.from('用户:密码🔐', 'utf8').toString('base64')}`,
-  );
+  assert.equal(captured.init.headers.Authorization, undefined);
   assert.equal(captured.init.redirect, 'error');
   assert.ok(captured.init.dispatcher, 'TLS-verifying undici dispatcher is supplied');
   assert.ok(captured.init.signal instanceof AbortSignal);
@@ -433,7 +430,7 @@ test('AnalyzeObservable sends POST payload and maps response', async () => {
   assert.equal(res.data.analyzer_name, 'VirusTotal_3_0');
 });
 
-test('AnalyzeObservable uses Basic Auth when no apiKey', async () => {
+test('AnalyzeObservable uses Bearer authentication', async () => {
   let captured;
   setFetch(async (url, init) => {
     captured = { url, init };
@@ -450,11 +447,11 @@ test('AnalyzeObservable uses Basic Auth when no apiKey', async () => {
     data: '8.8.8.8',
     data_type: 'ip',
   }, {
-    secret: { username: 'admin', password: 'secret' },
+    secret: { apiKey: 'analyzer-key' },
   });
   await handler();
 
-  assert.match(captured.init.headers['Authorization'], /^Basic /);
+  assert.equal(captured.init.headers['Authorization'], 'Bearer analyzer-key');
 });
 
 test('AnalyzeObservable handles server error', async () => {
@@ -938,7 +935,7 @@ test('SDK handlers use one context for request, bindings, secrets, and metadata'
   assert.equal(captured.init.headers['x-engine-instance'], 'inst-camel');
 });
 
-test('SDK handlers use Basic Auth when no apiKey in secret', async () => {
+test('SDK handlers omit Authorization when no apiKey is configured', async () => {
   let captured;
   setFetch(async (url, init) => {
     captured = { url, init };
@@ -953,16 +950,16 @@ test('SDK handlers use Basic Auth when no apiKey in secret', async () => {
   const { handlers, METHOD_LIST_JOBS_FULL } = await import('../src/cortex.js');
   const res = await handlers[METHOD_LIST_JOBS_FULL]({
     config: { endpoint: 'http://localhost:18080' },
-    secret: { username: 'admin', password: 'secret' },
+    secret: {},
     request: {},
   });
 
-  assert.match(captured.init.headers['Authorization'], /^Basic /);
+  assert.equal(captured.init.headers['Authorization'], undefined);
 });
 
 // ==================== Auth priority ====================
 
-test('apiKey takes priority over username/password', async () => {
+test('apiKey is sent as a Bearer token', async () => {
   let captured;
   setFetch(async (url, init) => {
     captured = { url, init };
@@ -975,7 +972,7 @@ test('apiKey takes priority over username/password', async () => {
   });
 
   const handler = await loadHandler(listAnalyzersPath, {}, {
-    secret: { apiKey: 'bearer-key', username: 'admin', password: 'secret' },
+    secret: { apiKey: 'bearer-key' },
   });
   await handler();
 

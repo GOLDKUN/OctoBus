@@ -1,6 +1,6 @@
 // TheHive_CORTEX Cortex REST proxy implementation
 // Bindings: endpoint/restBaseUrl/baseUrl (required), headers (optional), timeoutMs (optional)
-// Auth: apiKey (preferred Bearer), username+password (Basic fallback)
+// Auth: Cortex API key passed as a Bearer token.
 
 import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
 import { Agent as UndiciAgent } from 'undici';
@@ -221,13 +221,9 @@ export function rpcdef(ctx) {
 
   const requestWithDefaults = (req = {}) => {
     const apiKey = firstDefined(req?.api_key, req?.apiKey, bindings.api_key, bindings.apiKey);
-    const username = firstDefined(req?.username, bindings.username);
-    const password = firstDefined(req?.password, bindings.password);
     return {
       ...(req ?? {}),
       ...(apiKey !== undefined ? { api_key: apiKey } : {}),
-      ...(username !== undefined ? { username } : {}),
-      ...(password !== undefined ? { password } : {}),
     };
   };
 
@@ -253,16 +249,9 @@ export function rpcdef(ctx) {
       headers['Content-Type'] = 'application/json';
     }
 
-    // Auth priority: apiKey (Bearer) > Basic Auth
     const apiKey = firstDefined(authInfo?.api_key, authInfo?.apiKey);
     if (apiKey) {
       headers['Authorization'] = `Bearer ${apiKey}`;
-    } else {
-      const username = firstDefined(authInfo?.username);
-      const password = firstDefined(authInfo?.password);
-      if (username && password) {
-        headers['Authorization'] = `Basic ${Buffer.from(`${username}:${password}`, 'utf8').toString('base64')}`;
-      }
     }
     return headers;
   };
@@ -376,8 +365,6 @@ export function rpcdef(ctx) {
 
     logFlow('ListAnalyzers:done', { count: analyzerList.length });
     return {
-      err: toValue(null),
-      msg: toValue(null),
       data: {
         analyzers: analyzerList.map(mapAnalyzerData),
       },
@@ -432,8 +419,6 @@ export function rpcdef(ctx) {
 
     logFlow('AnalyzeObservable:done', { jobId: json?.id ?? json?._id });
     return {
-      err: toValue(null),
-      msg: toValue(null),
       data: mapJobData(json),
     };
   };
@@ -459,8 +444,6 @@ export function rpcdef(ctx) {
 
     logFlow('GetJobReport:done', { jobId, success: json?.success ?? json?.report?.success ?? false });
     return {
-      err: toValue(null),
-      msg: toValue(null),
       data: mapJobReport(json),
     };
   };
@@ -565,8 +548,6 @@ export function rpcdef(ctx) {
 
     logFlow('ListJobs:done', { count: jobList.length });
     return {
-      err: toValue(null),
-      msg: toValue(null),
       data: {
         jobs: jobList.map(mapJobData),
       },
@@ -593,8 +574,6 @@ export function rpcdef(ctx) {
       logFlow('GetJobStatus:done', { jobId: singleJobId, status: json?.status });
 
       return {
-        err: toValue(null),
-        msg: toValue(null),
         data: {
           statuses: [{
             job_id: String(json?.id ?? json?._id ?? singleJobId),
@@ -626,8 +605,6 @@ export function rpcdef(ctx) {
 
       logFlow('GetJobStatus:done', { count: statuses.length });
       return {
-        err: toValue(null),
-        msg: toValue(null),
         data: { statuses },
       };
     }
