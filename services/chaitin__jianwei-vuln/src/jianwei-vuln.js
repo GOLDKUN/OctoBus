@@ -39,6 +39,9 @@ function buildListParams(request) {
     if (request.offset !== undefined && request.offset !== null) {
         const offset = integer(request.offset, "offset");
         const count = request.count === undefined || request.count === null ? 10 : integer(request.count, "count", 1);
+        if (request.count === undefined || request.count === null) {
+            params.page_size = count;
+        }
         params.page = Math.floor(offset / count) + 1;
     }
     const orderBy = request.orderBy || request.order_by;

@@ -17,6 +17,7 @@ const DEFAULT_RETRY_OPTIONS = {
 };
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const IDEMPOTENT_METHODS = new Set(["AssetMgrService.IpAssetList", "AssetMgrService.IpAssetGet", "ScanVulnIpService.SearchScanVulnIpList", "ScanVulnIpService.SearchScanVulnWebList", "ScanVulnIpService.SearchScanVulnIpDetail", "IntelligenceService.GetIPIntelligenceList", "IntelligenceService.GetIPIntelligenceDetail", "IntelligenceService.GetDomainIntelligenceList", "IntelligenceService.GetDomainIntelligenceDetail", "KBService.SearchStandardVulnList", "KBService.GetStandardVulnDetailByCTID", "KBService.GetStandardVulnDetailByID", "KBService.SearchCustomizeTags", "ScanDeviceService.CheckScanDeviceAuth", "ScanDeviceService.GetDataAccessMapping", "ScanDeviceService.GetDeviceProductNameList", "ScanVulnIpService.GetVulnVptScore", "ScanVulnIpService.GetVulnVptScoreSetting", "ScanVulnIpService.GetVulnVptScoreState"]);
 
 let insecureAgent;
 
@@ -33,7 +34,8 @@ function normalizeBaseUrl(baseUrl) {
     catch {
         throw serviceError("INVALID_ARGUMENT", "baseUrl must be an absolute URL");
     }
-    const loopback = ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname);
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
+    const loopback = ["localhost", "127.0.0.1", "::1"].includes(hostname);
     if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback)) {
         throw serviceError("INVALID_ARGUMENT", "baseUrl must use HTTPS (HTTP is allowed only for loopback testing)");
     }
@@ -106,7 +108,8 @@ export class JianweiClient {
     async call(method, params = {}) {
         const deadline = Date.now() + this.timeoutMs;
         let lastError;
-        for (let attempt = 0; attempt <= this.retryOptions.maxRetries; attempt += 1) {
+        const retryAllowed = IDEMPOTENT_METHODS.has(method);
+        for (let attempt = 0; attempt <= (retryAllowed ? this.retryOptions.maxRetries : 0); attempt += 1) {
             const remaining = deadline - Date.now();
             if (remaining <= 0) {
                 throw serviceError("DEADLINE_EXCEEDED", `upstream request timed out after ${this.timeoutMs}ms`);
@@ -126,7 +129,7 @@ export class JianweiClient {
                 });
                 if (!response.ok) {
                     const error = serviceError(mapHttpStatusToCode(response.status), `upstream returned HTTP ${response.status}`);
-                    if (this.isRetryable(response.status, attempt)) {
+                    if (retryAllowed && this.isRetryable(response.status, attempt)) {
                         lastError = error;
                         await this.backoff(attempt, deadline);
                         continue;
@@ -136,7 +139,8 @@ export class JianweiClient {
                 const payload = await readJson(response);
                 // Jianwei's deployments sometimes return a legacy envelope without
                 // JSON-RPC metadata; when present, metadata must still be correct.
-                if ((payload?.jsonrpc !== undefined && payload.jsonrpc !== "2.0")
+                if (typeof payload !== "object" || payload === null
+                    || (payload.jsonrpc !== undefined && payload.jsonrpc !== "2.0")
                     || (payload?.id !== undefined && payload.id !== requestId)) {
                     throw serviceError("INTERNAL", "upstream returned a mismatched JSON-RPC response");
                 }
@@ -155,7 +159,7 @@ export class JianweiClient {
                 if (error?.legacyCode) {
                     throw error;
                 }
-                if (attempt < this.retryOptions.maxRetries) {
+                if (retryAllowed && attempt < this.retryOptions.maxRetries) {
                     lastError = error;
                     await this.backoff(attempt, deadline);
                     continue;

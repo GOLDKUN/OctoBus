@@ -113,6 +113,7 @@ test("handlers reject malformed or precision-losing integer fields", async () =>
 test("client uses secure defaults, bounded requests, and typed errors", async (t) => {
     await t.test("normalizes only safe base URLs", () => {
         assert.equal(clientTest.normalizeBaseUrl("https://jianwei.example.test/insight/"), "https://jianwei.example.test");
+        assert.equal(clientTest.normalizeBaseUrl("http://[::1]:8080"), "http://[::1]:8080");
         assert.throws(() => clientTest.normalizeBaseUrl("http://jianwei.example.test"), /HTTPS/);
         assert.throws(() => clientTest.normalizeBaseUrl("https://user:pass@jianwei.example.test"), /credentials/);
     });
@@ -146,14 +147,20 @@ test("client uses secure defaults, bounded requests, and typed errors", async (t
         };
         const result = await new JianweiClient("http://127.0.0.1:18080", "token", {
             retryOptions: { maxRetries: 1, retryDelayMs: 0 },
-        }).call("test.method");
+        }).call("AssetMgrService.IpAssetList");
         assert.deepEqual(result, { recovered: true });
         assert.equal(calls, 2);
+        calls = 0;
+        globalThis.fetch = async () => { calls += 1; return response({}, 503); };
+        await assert.rejects(new JianweiClient("http://127.0.0.1:18080", "token", { retryOptions: { maxRetries: 2, retryDelayMs: 0 } }).call("ScanDeviceService.CreateDevice"));
+        assert.equal(calls, 1);
     });
     await t.test("rejects unsafe configuration and malformed successful responses", async () => {
         assert.throws(() => new JianweiClient("http://127.0.0.1:18080", "", {}), (error) => error.legacyCode === "UNAUTHENTICATED");
         assert.throws(() => new JianweiClient("http://127.0.0.1:18080", "token", { timeoutMs: 0 }), (error) => error.legacyCode === "INVALID_ARGUMENT");
         globalThis.fetch = async () => response({ jsonrpc: "2.0" });
+        await assert.rejects(new JianweiClient("http://127.0.0.1:18080", "token", { retryOptions: { maxRetries: 0 } }).call("test.method"), (error) => error.legacyCode === "INTERNAL");
+        globalThis.fetch = async () => response("invalid");
         await assert.rejects(new JianweiClient("http://127.0.0.1:18080", "token", { retryOptions: { maxRetries: 0 } }).call("test.method"), (error) => error.legacyCode === "INTERNAL");
         globalThis.fetch = async () => response({ jsonrpc: "2.0", id: 99, result: {} });
         await assert.rejects(new JianweiClient("http://127.0.0.1:18080", "token", { retryOptions: { maxRetries: 0 } }).call("test.method"), (error) => error.legacyCode === "INTERNAL");
