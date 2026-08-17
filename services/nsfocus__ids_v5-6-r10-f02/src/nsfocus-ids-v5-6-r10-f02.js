@@ -131,6 +131,10 @@ const splitIpPort = (cell) => {
   return index <= 0 ? { ip: text, port: '' } : { ip: text.slice(0, index).trim(), port: text.slice(index + 1).trim() };
 };
 const hasEventTable = (html) => /<table\b[^>]*\bid\s*=\s*(["'])mytable\1[^>]*>/i.test(String(html));
+const hasEventDataRows = (html) => {
+  const table = (String(html).match(/<table\b[^>]*\bid\s*=\s*(["'])mytable\1[^>]*>([\s\S]*?)<\/table>/i) ?? [])[2] ?? '';
+  return /<tr\b[^>]*>[\s\S]*?<td\b/i.test(table);
+};
 const parseEventList = (html, limit = 0) => {
   const entries = [];
   const rowRe = /<tr\b(?=[^>]*\bclass\s*=\s*(["'])(?:even|odd)\1)[^>]*>([\s\S]*?)<\/tr>/gi;
@@ -154,10 +158,24 @@ const parseEventList = (html, limit = 0) => {
   }
   return entries;
 };
+const responseCharset = (response) => {
+  const contentType = response.headers?.get?.('content-type') ?? '';
+  return (String(contentType).match(/\bcharset\s*=\s*["']?([^\s;"']+)/i) ?? [])[1] || 'utf-8';
+};
+const decodeResponseBytes = (bytes, response) => {
+  try { return new TextDecoder(responseCharset(response)).decode(bytes); }
+  catch { throw errorWithCode('FAILED_PRECONDITION', 'upstream response uses an unsupported character encoding'); }
+};
 const readBoundedText = async (response, maxBytes) => {
   const declaredLength = Number(response.headers?.get?.('content-length') ?? 0);
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response is too large');
   if (!response.body?.getReader) {
+    if (typeof response.arrayBuffer === 'function') {
+      let bytes;
+      try { bytes = new Uint8Array(await response.arrayBuffer()); } catch { throw errorWithCode('UNAVAILABLE', 'upstream response read failed'); }
+      if (bytes.byteLength > maxBytes) throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response is too large');
+      return decodeResponseBytes(bytes, response);
+    }
     let text;
     try { text = await response.text(); } catch { throw errorWithCode('UNAVAILABLE', 'upstream response read failed'); }
     if (Buffer.byteLength(text) > maxBytes) throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response is too large');
@@ -175,7 +193,7 @@ const readBoundedText = async (response, maxBytes) => {
     if (err?.legacyCode) throw err;
     throw errorWithCode('UNAVAILABLE', 'upstream response read failed');
   }
-  return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+  return decodeResponseBytes(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))), response);
 };
 const throwForHttpStatus = (status) => {
   if (status === 401 || status === 403) throw errorWithCode('PERMISSION_DENIED', `upstream HTTP ${status}`);
@@ -199,10 +217,11 @@ const runQueryEventList = async (req = {}, ctx = {}) => {
     throw errorWithCode(code, code === 'DEADLINE_EXCEEDED' ? `upstream request timed out after ${timeoutMs}ms` : 'upstream request failed');
   }
   const status = Number(response.status) || 0;
-  const text = await readBoundedText(response, resolveMaxResponseBytes(callCtx));
   if (status < 200 || status >= 300) throwForHttpStatus(status);
+  const text = await readBoundedText(response, resolveMaxResponseBytes(callCtx));
   if (!hasEventTable(text)) throw errorWithCode('FAILED_PRECONDITION', 'unexpected response (session may be expired or not the IDS event page)');
   const entries = parseEventList(text, limit);
+  if (entries.length === 0 && hasEventDataRows(text)) throw errorWithCode('FAILED_PRECONDITION', 'event table rows do not match the expected V5.6R10F02 format');
   logFlow(callCtx, 'QueryEventList:done', { ...logTarget(url), http_status: status, entry_count: entries.length, body_bytes: Buffer.byteLength(text) });
   return { http_status: status, total: entries.length, entries };
 };
@@ -212,4 +231,4 @@ export function rpcdef(ctx = {}) {
   return { [QUERY_EVENT_LIST_PATH]: async (req) => runQueryEventList(req ?? callCtx.req, callCtx) };
 }
 export const handlers = { [METHOD_QUERY_EVENT_LIST_FULL]: (ctx = {}) => runQueryEventList(requestFromContext(ctx), ctx) };
-export const _test = { attrTitles, buildHeaders, buildTlsOptions, decodeEntities, errorWithCode, grpcCodeFor, hasEventTable, hasOwn, normalizeBaseUrl, parseEventList, pickBoolean, pickFirstBoolean, pickFirstString, pickInt, pickStringFrom, readBoundedText, requestFromContext, requireBindings, resolveCallContext, resolveCookie, resolveHost, resolveMaxResponseBytes, resolveTimeoutMs, sanitizeHeaders, splitIpPort, stripTags, throwForHttpStatus, unwrapScalar };
+export const _test = { attrTitles, buildHeaders, buildTlsOptions, decodeEntities, decodeResponseBytes, errorWithCode, grpcCodeFor, hasEventDataRows, hasEventTable, hasOwn, normalizeBaseUrl, parseEventList, pickBoolean, pickFirstBoolean, pickFirstString, pickInt, pickStringFrom, readBoundedText, requestFromContext, requireBindings, resolveCallContext, resolveCookie, resolveHost, resolveMaxResponseBytes, resolveTimeoutMs, responseCharset, sanitizeHeaders, splitIpPort, stripTags, throwForHttpStatus, unwrapScalar };

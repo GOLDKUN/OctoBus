@@ -257,6 +257,36 @@ test('streaming response bounds cancel oversized bodies and map read errors', as
   );
 });
 
+test('decodes device response using the declared GBK charset', () => {
+  const response = { headers: createHeaders({ 'content-type': 'text/html; charset=gb2312' }) };
+  assert.equal(_test.responseCharset(response), 'gb2312');
+  assert.equal(_test.decodeResponseBytes(Uint8Array.from([0xb5, 0xcd]), response), '低');
+  assert.throws(
+    () => _test.decodeResponseBytes(Uint8Array.from([1]), { headers: createHeaders({ 'content-type': 'text/html; charset=x-invalid-charset' }) }),
+    (e) => e.legacyCode === 'FAILED_PRECONDITION',
+  );
+});
+
+test('rejects unrecognized event rows instead of reporting zero alerts', async () => {
+  withFetch(async () => fakeResponse(200, '<table id="mytable"><tr class="event-row"><td>低</td><td>2026-01-02 03:04:05</td><td>event</td><td>192.0.2.1:1</td><td>192.0.2.2:2</td></tr></table>'));
+  await assert.rejects(
+    () => callHandler(buildCtx({ host: 'https://ids', cookie: 'secret-cookie' })),
+    (e) => e.legacyCode === 'FAILED_PRECONDITION',
+  );
+});
+
+test('maps HTTP status before reading an oversized error page', async () => {
+  withFetch(async () => ({
+    ...fakeResponse(403, '', false),
+    headers: createHeaders({ 'content-length': '999999' }),
+    text: async () => { throw new Error('must not read'); },
+  }));
+  await assert.rejects(
+    () => callHandler(buildCtx({ host: 'https://ids', cookie: 'secret-cookie' }, { limits: { maxResponseBytes: 1 } })),
+    (e) => e.legacyCode === 'PERMISSION_DENIED',
+  );
+});
+
 test('rpcdef falls back to ctx.req when called without an argument', async () => {
   const mock = await createMockServer();
   try {
