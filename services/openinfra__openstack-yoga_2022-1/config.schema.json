@@ -28,6 +28,7 @@
     "project_name": {
       "type": "string",
       "minLength": 1,
+      "pattern": "\\S",
       "description": "Default Keystone project name to scope tokens against."
     },
     "project_domain_name": {
