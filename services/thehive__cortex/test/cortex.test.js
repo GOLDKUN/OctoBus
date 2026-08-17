@@ -64,11 +64,23 @@ test('internal helpers normalize bindings, headers, errors, and call context', a
   assert.deepEqual(_test.toValue(1n), { stringValue: '1' });
   assert.equal(_test.unwrapString(null), '');
   assert.equal(_test.unwrapString({ value: null }), '');
-  assert.deepEqual(_test.fromProtoValue({ structValue: { fields: {
+  assert.deepEqual(_test.normalizeParameters({ fields: {
     name: { stringValue: 'cortex' },
     missing: { nullValue: 'NULL_VALUE' },
-  } } }), { name: 'cortex', missing: null });
-  assert.deepEqual(_test.fromProtoValue(['plain', { boolValue: false }]), ['plain', false]);
+    nested: { structValue: { fields: { enabled: { boolValue: true } } } },
+  } }), { name: 'cortex', missing: null, nested: { enabled: true } });
+  assert.deepEqual(_test.normalizeParameters({
+    fields: { limit: 10 }, stringValue: 'keep',
+  }), { fields: { limit: 10 }, stringValue: 'keep' });
+  assert.equal(_test.normalizeParameters(null), null);
+  assert.deepEqual(_test.normalizeParameters([]), []);
+  assert.deepEqual(_test.normalizeParameters({ fields: [] }), { fields: [] });
+  assert.deepEqual(_test.normalizeParameters({ fields: {
+    invalid: { listValue: {} },
+  } }), { fields: { invalid: { listValue: {} } } });
+  assert.deepEqual(_test.normalizeParameters({ fields: { invalid: null } }), {
+    fields: { invalid: null },
+  });
 
   const unknown = _test.errorWithCode('SOMETHING_NEW', 'message');
   assert.equal(unknown.legacyCode, 'SOMETHING_NEW');
@@ -817,6 +829,27 @@ test('GetJobStatus batch aggregates documented single-job GET responses', async 
   assert.equal(captured.every(({ init }) => init.method === 'GET'), true);
   assert.equal(res.data.statuses.length, 2);
   assert.deepEqual(res.data.statuses.map(({ status }) => status), ['Success', 'InProgress']);
+});
+
+test('GetJobStatus batch preserves successful results when one job is missing', async () => {
+  setFetch(async (url) => {
+    const jobId = url.split('/').at(-1);
+    return jobId === 'missing'
+      ? { ok: false, status: 404, headers: new Map(), text: async () => 'not found' }
+      : {
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/json']]),
+          text: async () => JSON.stringify({ id: jobId, status: 'Success' }),
+        };
+  });
+  const handler = await loadHandler(getJobStatusPath, { job_ids: ['job1', 'missing', 'job2'] });
+  const res = await handler();
+  assert.deepEqual(res.data.statuses, [
+    { job_id: 'job1', status: 'Success' },
+    { job_id: 'missing', status: 'NotFound' },
+    { job_id: 'job2', status: 'Success' },
+  ]);
 });
 
 test('GetJobStatus handles not found', async () => {

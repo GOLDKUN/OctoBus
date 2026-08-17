@@ -152,23 +152,45 @@ const toValue = (val) => {
   return { stringValue: String(val) };
 };
 
-const fromProtoValue = (value) => {
-  if (Array.isArray(value)) return value.map(fromProtoValue);
-  if (!value || typeof value !== 'object') return value;
+const PROTO_VALUE_KEYS = new Set([
+  'stringValue', 'numberValue', 'boolValue', 'nullValue', 'listValue', 'structValue',
+]);
+
+const isProtoValue = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== 1 || !PROTO_VALUE_KEYS.has(keys[0])) return false;
+  if (keys[0] === 'listValue') {
+    return Array.isArray(value.listValue?.values) && value.listValue.values.every(isProtoValue);
+  }
+  if (keys[0] === 'structValue') {
+    const fields = value.structValue?.fields;
+    return fields && typeof fields === 'object' && !Array.isArray(fields) &&
+      Object.values(fields).every(isProtoValue);
+  }
+  return true;
+};
+
+const decodeProtoValue = (value) => {
   if ('stringValue' in value) return String(value.stringValue ?? '');
   if ('numberValue' in value) return Number(value.numberValue);
   if ('boolValue' in value) return Boolean(value.boolValue);
   if ('nullValue' in value) return null;
-  if (value.listValue && Array.isArray(value.listValue.values)) {
-    return value.listValue.values.map(fromProtoValue);
+  if ('listValue' in value) return value.listValue.values.map(decodeProtoValue);
+  return Object.fromEntries(Object.entries(value.structValue.fields)
+    .map(([key, child]) => [key, decodeProtoValue(child)]));
+};
+
+const normalizeParameters = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const keys = Object.keys(value);
+  const fields = value.fields;
+  if (keys.length !== 1 || !fields || typeof fields !== 'object' || Array.isArray(fields) ||
+      !Object.values(fields).every(isProtoValue)) {
+    return value;
   }
-  if (value.structValue?.fields && typeof value.structValue.fields === 'object') {
-    return fromProtoValue(value.structValue);
-  }
-  const source = value.fields && typeof value.fields === 'object' && !Array.isArray(value.fields)
-    ? value.fields
-    : value;
-  return Object.fromEntries(Object.entries(source).map(([key, child]) => [key, fromProtoValue(child)]));
+  return Object.fromEntries(Object.entries(fields)
+    .map(([key, child]) => [key, decodeProtoValue(child)]));
 };
 
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj ?? {}, key);
@@ -387,7 +409,7 @@ export function rpcdef(ctx) {
     const rawTlp = firstDefined(req?.tlp, req?.Tlp);
     const tlp = toPositiveInt(rawTlp);
     const message = pickStringField(req, ['message', 'Message']) || '';
-    const parameters = fromProtoValue(req?.parameters ?? req?.Parameters ?? {});
+    const parameters = normalizeParameters(req?.parameters ?? req?.Parameters ?? {});
 
     const payload = {
       data,
@@ -586,16 +608,21 @@ export function rpcdef(ctx) {
       // Cortex exposes single-job lookup; aggregate it for a portable batch RPC.
       const headers = buildHeaders(req, false);
       logFlow('GetJobStatus:start', { jobIds: batchJobIds });
-      const statuses = await Promise.all(batchJobIds.map(async (jobId) => {
+      const statuses = [];
+      for (const jobId of batchJobIds) {
         const normalizedId = String(jobId);
         const url = `${baseUrl}/api/job/${encodeURIComponent(normalizedId)}`;
         const res = await fetchCortex(url, { method: 'GET', headers });
+        if (res.status === 404) {
+          statuses.push({ job_id: normalizedId, status: 'NotFound' });
+          continue;
+        }
         const json = await readJsonResponse(res, {});
-        return {
+        statuses.push({
           job_id: String(json?.id ?? json?._id ?? normalizedId),
           status: String(json?.status ?? 'Unknown'),
-        };
-      }));
+        });
+      }
 
       logFlow('GetJobStatus:done', { count: statuses.length });
       return {
@@ -643,7 +670,7 @@ export const _test = {
   parseHeaders,
   toPositiveInt,
   toValue,
-  fromProtoValue,
+  normalizeParameters,
   readResponseText,
   resolveTimeoutMs,
   sanitizeHeaders,
