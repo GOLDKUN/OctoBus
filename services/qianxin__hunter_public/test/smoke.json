@@ -7,9 +7,6 @@
   "protocols": ["connect", "grpc", "mcp"],
   "upstream": {
     "method": "GET",
-    "path": "/openApi/userInfo",
-    "query": {
-      "api-key": "smoke-secret"
-    }
+    "path": "/openApi/userInfo?api-key=smoke-secret"
   }
 }
