@@ -343,7 +343,7 @@ const buildQueryString = (params = {}) => {
   return '?' + entries.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join('&');
 };
 
-const nextPageUrl = (json, currentUrl, initialOrigin, linkKeys) => {
+const nextPageUrl = (json, currentUrl, initialUrl, linkKeys) => {
   let raw = '';
   for (const key of linkKeys) {
     const links = json?.[key];
@@ -357,8 +357,11 @@ const nextPageUrl = (json, currentUrl, initialOrigin, linkKeys) => {
   if (!raw) return '';
   try {
     const resolved = new URL(raw, currentUrl);
-    if (resolved.origin !== initialOrigin || !['http:', 'https:'].includes(resolved.protocol)) {
-      throw engineError('FAILED_PRECONDITION', 'upstream pagination next link must remain on the same origin');
+    const initial = new URL(initialUrl);
+    const sameHost = resolved.hostname.toLowerCase() === initial.hostname.toLowerCase();
+    const noDowngrade = initial.protocol !== 'https:' || resolved.protocol === 'https:';
+    if (!sameHost || !noDowngrade || !['http:', 'https:'].includes(resolved.protocol)) {
+      throw engineError('FAILED_PRECONDITION', 'upstream pagination next link must remain on the same host without a TLS downgrade');
     }
     return resolved.toString();
   } catch (err) {
@@ -368,7 +371,6 @@ const nextPageUrl = (json, currentUrl, initialOrigin, linkKeys) => {
 };
 
 const fetchAllPages = async (callCtx, initialUrl, token, label, collectionKey, linkKeys) => {
-  const initialOrigin = new URL(initialUrl).origin;
   const seen = new Set();
   const records = [];
   let url = initialUrl;
@@ -385,7 +387,7 @@ const fetchAllPages = async (callCtx, initialUrl, token, label, collectionKey, l
     try { json = rawBody ? JSON.parse(rawBody) : {}; }
     catch { throw engineError('UNKNOWN', `${label} response is not valid JSON`); }
     if (Array.isArray(json?.[collectionKey])) records.push(...json[collectionKey]);
-    url = nextPageUrl(json, url, initialOrigin, linkKeys);
+    url = nextPageUrl(json, url, initialUrl, linkKeys);
     if (!url) return records;
   }
   throw engineError('FAILED_PRECONDITION', `${label} pagination exceeds 100 pages`);

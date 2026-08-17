@@ -93,8 +93,9 @@ A two-step Keystone token flow is used:
 - `OpenStack_Yoga_2022_1.OpenStack_Yoga_2022_1/ListFlavors`
 
 List methods request pages of up to 1,000 records and follow the standard
-OpenStack `next` links. Pagination is restricted to the initial endpoint origin
-and at most 100 pages to prevent credential forwarding and pagination loops.
+OpenStack `next` links. Pagination is restricted to the initial endpoint host,
+forbids TLS downgrades, and stops after 100 pages to prevent credential
+forwarding and pagination loops.
 
 ## Behavior
 

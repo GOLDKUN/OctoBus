@@ -993,7 +993,43 @@ test('pagination refuses cross-origin next links to protect the scoped token', (
     () => _test.nextPageUrl(
       { links: { next: 'https://attacker.example/servers?page=2' } },
       'https://compute.example.com/servers?page=1',
-      'https://compute.example.com',
+      'https://compute.example.com/servers?page=1',
+      ['links'],
+    ),
+    (err) => err instanceof GrpcError && err.legacyCode === 'FAILED_PRECONDITION',
+  );
+});
+
+test('fetchAllPages follows Keystone object-form links.next', async () => {
+  const requested = [];
+  setFetch(async (url) => {
+    requested.push(String(url));
+    if (requested.length === 1) {
+      return responseOf(200, {
+        projects: [{ id: 'project-1' }],
+        links: { next: 'https://identity.example.com:8443/v3/projects?marker=project-1' },
+      });
+    }
+    return responseOf(200, { projects: [{ id: 'project-2' }], links: { next: null } });
+  });
+  const records = await _test.fetchAllPages(
+    buildCtx(),
+    'https://identity.example.com/v3/projects?limit=1000',
+    TOKEN,
+    'ListProjects',
+    'projects',
+    ['links', 'projects_links'],
+  );
+  assert.deepEqual(records, [{ id: 'project-1' }, { id: 'project-2' }]);
+  assert.equal(requested[1], 'https://identity.example.com:8443/v3/projects?marker=project-1');
+});
+
+test('pagination refuses an HTTPS to HTTP downgrade', () => {
+  assert.throws(
+    () => _test.nextPageUrl(
+      { links: { next: 'http://compute.example.com/servers?page=2' } },
+      'https://compute.example.com/servers?page=1',
+      'https://compute.example.com/servers?page=1',
       ['links'],
     ),
     (err) => err instanceof GrpcError && err.legacyCode === 'FAILED_PRECONDITION',
