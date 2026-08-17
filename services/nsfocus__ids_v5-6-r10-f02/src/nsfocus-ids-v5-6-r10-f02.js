@@ -135,8 +135,11 @@ const hasEventDataRows = (html) => {
   const table = (String(html).match(/<table\b[^>]*\bid\s*=\s*(["'])mytable\1[^>]*>([\s\S]*?)<\/table>/i) ?? [])[2] ?? '';
   const eventRowRe = /<tr\b(?=[^>]*\bclass\s*=\s*(["'])(?:even|odd)\1)[^>]*>/i;
   for (const row of table.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
-    if (eventRowRe.test(row[0])) return true;
     const cells = [...row[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((cell) => cell[1]);
+    if (eventRowRe.test(row[0])) {
+      if (cells.length === 1 && /<td\b[^>]*\bcolspan\s*=/i.test(row[1])) continue;
+      return true;
+    }
     if (cells.length >= 5 && cells.some((cell) => DATETIME_RE.test(stripTags(cell)))) return true;
   }
   return false;

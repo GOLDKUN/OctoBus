@@ -275,8 +275,8 @@ test('rejects unrecognized event rows instead of reporting zero alerts', async (
   );
 });
 
-test('allows an empty-state row that is not shaped like an event', async () => {
-  withFetch(async () => fakeResponse(200, '<table id="mytable"><tr class="empty"><td colspan="7">暂无数据</td></tr></table>'));
+test('allows a zebra-styled empty-state row that is not shaped like an event', async () => {
+  withFetch(async () => fakeResponse(200, '<table id="mytable"><tr class="even"><td colspan="7">暂无数据</td></tr></table>'));
   const out = await callHandler(buildCtx({ host: 'https://ids', cookie: 'secret-cookie' }));
   assert.equal(out.total, 0);
   assert.deepEqual(out.entries, []);
