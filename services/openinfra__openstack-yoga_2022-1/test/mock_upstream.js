@@ -43,13 +43,18 @@ const sendJson = (res, status, payload) => {
   res.end(body);
 };
 
-const authOkBody = () => ({
+const authOkBody = (baseUrl) => ({
   token: {
     methods: ['password'],
     user: { id: 'u-0001', name: USERNAME, domain: { id: 'ud-1', name: USER_DOMAIN } },
     project: { id: PROJECT_ID, name: PROJECT_NAME, domain: { id: 'pd-1', name: PROJECT_DOMAIN } },
     issued_at: '2026-01-01T00:00:00.000000Z',
     expires_at: '2026-01-01T01:00:00.000000Z',
+    catalog: [
+      { type: 'compute', name: 'nova', endpoints: [{ interface: 'public', region: 'RegionOne', region_id: 'RegionOne', url: `${baseUrl}/v2.1/%(project_id)s` }] },
+      { type: 'network', name: 'neutron', endpoints: [{ interface: 'public', region: 'RegionOne', region_id: 'RegionOne', url: baseUrl }] },
+      { type: 'volumev3', name: 'cinderv3', endpoints: [{ interface: 'public', region: 'RegionOne', region_id: 'RegionOne', url: `${baseUrl}/v3/%(project_id)s` }] },
+    ],
   },
 });
 
@@ -261,7 +266,7 @@ export function createMockServer() {
       if (!scope || !scope.name) { sendJson(res, 401, { error: { code: 401, message: 'scope.project.name required' } }); return; }
       if (scope.name !== PROJECT_NAME) { sendJson(res, 401, { error: { code: 401, message: 'unknown project' } }); return; }
       res.writeHead(201, { 'Content-Type': 'application/json', 'X-Subject-Token': TOKEN });
-      res.end(JSON.stringify(authOkBody()));
+      res.end(JSON.stringify(authOkBody(`http://${req.headers.host}`)));
       return;
     }
 
@@ -274,7 +279,7 @@ export function createMockServer() {
 
     if (path === '/v3/projects') { sendJson(res, 200, projectsPayload()); return; }
 
-    const serversListMatch = path.match(/^\/v2\/([^/]+)\/servers$/);
+    const serversListMatch = path.match(/^\/v2(?:\.1)?\/([^/]+)\/servers$/);
     if (serversListMatch) {
       const requestedProjectId = serversListMatch[1];
       if (requestedProjectId === 'p-UNKNOWN') { sendJson(res, 404, { error: { code: 404, message: 'project not found' } }); return; }
@@ -283,7 +288,7 @@ export function createMockServer() {
       return;
     }
 
-    const serverDetailMatch = path.match(/^\/v2\/([^/]+)\/servers\/([^/]+)$/);
+    const serverDetailMatch = path.match(/^\/v2(?:\.1)?\/([^/]+)\/servers\/([^/]+)$/);
     if (serverDetailMatch) {
       const [, projectPart, serverId] = serverDetailMatch;
       if (projectPart === 'p-HTTP500') { sendJson(res, 500, { error: { code: 500, message: 'internal error' } }); return; }
@@ -292,7 +297,7 @@ export function createMockServer() {
       return;
     }
 
-    const flavorsMatch = path.match(/^\/v2\/([^/]+)\/flavors$/);
+    const flavorsMatch = path.match(/^\/v2(?:\.1)?\/([^/]+)\/flavors$/);
     if (flavorsMatch) { sendJson(res, 200, flavorsPayload()); return; }
 
     if (path === '/v2.0/networks') { sendJson(res, 200, networksPayload()); return; }

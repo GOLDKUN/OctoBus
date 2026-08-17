@@ -2,7 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": true,
-  "required": ["project_name"],
+  "allOf": [
+    { "anyOf": [{ "required": ["project_name"] }, { "required": ["projectName"] }] }
+  ],
   "anyOf": [
     { "required": ["auth_url"] },
     { "required": ["authUrl"] },
@@ -23,7 +25,7 @@
     },
     "region": {
       "type": "string",
-      "description": "OpenStack region name. Reserved for service catalog routing; currently informational."
+      "description": "OpenStack service-catalog region. If set, every queried service must expose a matching public endpoint; cross-region fallback is rejected."
     },
     "project_name": {
       "type": "string",

@@ -65,9 +65,12 @@ const normalizeAuthUrl = (value, allowInsecure) => {
   try {
     const parsed = new URL(raw);
     if (parsed.username || parsed.password) return '';
-    if (parsed.protocol === 'https:') return parsed.toString().replace(/\/+$/, '');
-    const loopback = ['127.0.0.1', '::1', 'localhost'].includes(parsed.hostname);
-    if (parsed.protocol === 'http:' && (allowInsecure || loopback)) return parsed.toString().replace(/\/+$/, '');
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
+    const loopback = ['127.0.0.1', '::1', 'localhost'].includes(hostname);
+    if (parsed.protocol === 'https:' || (parsed.protocol === 'http:' && (allowInsecure || loopback))) {
+      parsed.pathname = parsed.pathname.replace(/\/+$/, '').replace(/\/v3$/i, '') || '/';
+      return parsed.toString().replace(/\/+$/, '');
+    }
   } catch { /* invalid URL */ }
   return '';
 };
@@ -291,9 +294,13 @@ const obtainToken = async (callCtxOrRaw) => {
 const endpointFor = (tokenCtx, type, region = '') => {
   const service = tokenCtx.catalog.find((item) => item?.type === type || item?.name === type);
   const endpoints = Array.isArray(service?.endpoints) ? service.endpoints : [];
-  const endpoint = endpoints.find((item) => item?.interface === 'public' && (!region || item?.region === region || item?.region_id === region))
-    || endpoints.find((item) => item?.interface === 'public')
-    || endpoints[0];
+  const publicEndpoints = endpoints.filter((item) => item?.interface === 'public');
+  const endpoint = region
+    ? publicEndpoints.find((item) => item?.region === region || item?.region_id === region)
+    : publicEndpoints[0];
+  if (region && service && !endpoint) {
+    throw engineError('FAILED_PRECONDITION', `no public ${type} endpoint for region ${region}`);
+  }
   const encodedProject = encodeURIComponent(tokenCtx.projectId);
   const raw = toTrimmedString(endpoint?.url)
     .replace(/\{project_id\}/g, encodedProject)

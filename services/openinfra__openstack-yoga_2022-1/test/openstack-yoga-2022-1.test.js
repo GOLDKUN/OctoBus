@@ -117,21 +117,24 @@ test('service catalog selects regional public endpoints safely', () => {
     ] }],
   };
   assert.equal(_test.endpointFor(token, 'compute', 'RegionOne'), 'https://nova.example/v2.1/project%201');
+  assert.throws(() => _test.endpointFor(token, 'compute', 'MissingRegion'), /no public compute endpoint for region MissingRegion/);
   assert.equal(_test.serviceUrl(token, 'compute', '/legacy', '/servers', 'RegionOne'), 'https://nova.example/v2.1/project%201/servers');
   assert.equal(_test.serviceUrl(token, 'compute', '/legacy', '/servers', 'RegionOne', 'override'), 'https://nova.example/v2.1/override/servers');
   assert.equal(_test.endpointFor({ ...token, catalog: [] }, 'compute'), token.authUrl);
   assert.equal(_test.endpointFor({ ...token, catalog: [{ type: 'compute', endpoints: [{ interface: 'public', url: 'ftp://bad' }] }] }, 'compute'), token.authUrl);
   const pythonCatalog = { ...token, catalog: [{ type: 'compute', endpoints: [{ interface: 'public', url: 'https://nova.example/v2.1/%(project_id)s/%(tenant_id)s' }] }] };
   assert.equal(_test.endpointFor(pythonCatalog, 'compute'), 'https://nova.example/v2.1/project%201/project%201');
-  const networkCatalog = { ...token, catalog: [{ type: 'network', endpoints: [{ interface: 'public', url: 'https://neutron.example' }] }] };
+  const networkCatalog = { ...token, catalog: [{ type: 'network', endpoints: [{ interface: 'public', region: 'RegionOne', url: 'https://neutron.example' }] }] };
   assert.equal(_test.serviceUrl(networkCatalog, 'network', '/legacy', '/v2.0/networks', 'RegionOne'), 'https://neutron.example/v2.0/networks');
-  const volumeCatalog = { ...token, catalog: [{ type: 'volumev3', endpoints: [{ interface: 'public', url: 'https://cinder.example/v3/%(project_id)s' }] }] };
+  const volumeCatalog = { ...token, catalog: [{ type: 'volumev3', endpoints: [{ interface: 'public', region: 'RegionOne', url: 'https://cinder.example/v3/%(project_id)s' }] }] };
   assert.equal(_test.serviceUrl(volumeCatalog, 'volumev3', '/legacy', '/volumes', 'RegionOne'), 'https://cinder.example/v3/project%201/volumes');
 });
 
 test('loopback HTTP is accepted for local smoke without weakening remote defaults', () => {
   assert.equal(_test.normalizeAuthUrl('http://127.0.0.1:5000', false), 'http://127.0.0.1:5000');
   assert.equal(_test.normalizeAuthUrl('http://localhost:5000/', false), 'http://localhost:5000');
+  assert.equal(_test.normalizeAuthUrl('http://[::1]:5000/v3', false), 'http://[::1]:5000');
+  assert.equal(_test.normalizeAuthUrl('https://id.example/v3/', false), 'https://id.example');
   assert.equal(_test.normalizeAuthUrl('https://user:pass@example.com', false), '');
 });
 
