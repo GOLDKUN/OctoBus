@@ -418,12 +418,12 @@ export function rpcdef(ctx) {
     const headers = buildHeaders(token);
 
     logFlow('GetVulnSummary', { project_id: projectId });
-    // DongTai 1.14.0 exposes type and severity summaries through distinct
-    // endpoints. Fetch both rather than relying on a synthetic combined mock.
-    const [typeJson, levelJson] = await Promise.all([
-      fetchJsonDongtai(typeUrl, { method: 'GET', headers }, {}),
-      fetchJsonDongtai(levelUrl, { method: 'GET', headers }, {}),
-    ]);
+    // DongTai 1.14.0 exposes type and severity summaries through two required
+    // endpoints. Execute them in sequence so a failed request cannot leave an
+    // orphan sibling request running. Failure of either endpoint fails the RPC
+    // because returning only one dimension would misrepresent the summary.
+    const typeJson = await fetchJsonDongtai(typeUrl, { method: 'GET', headers }, {});
+    const levelJson = await fetchJsonDongtai(levelUrl, { method: 'GET', headers }, {});
 
     const levels = Array.isArray(levelJson?.data?.level)
       ? levelJson.data.level.map((item) => ({

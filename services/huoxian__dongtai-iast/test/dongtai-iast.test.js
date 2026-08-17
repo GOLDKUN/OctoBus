@@ -509,6 +509,39 @@ describe('Error Handling', () => {
     );
   });
 
+  it('fails the summary RPC sequentially when summary_level fails', async () => {
+    const requested = [];
+    let typeBodyConsumed = false;
+    globalThis.fetch = mock.fn(async (url) => {
+      const urlStr = String(url);
+      requested.push(urlStr);
+      if (urlStr.includes('/summary_type')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => {
+            typeBodyConsumed = true;
+            return JSON.stringify({ status: 201, data: { type: [] } });
+          },
+        };
+      }
+      // The second request must not start until the first response has been
+      // completely consumed; this prevents an orphan concurrent sibling.
+      assert.equal(typeBodyConsumed, true);
+      return createMockResponse({ status: 500 }, 503);
+    });
+
+    await assert.rejects(
+      () => handlers[METHOD_GET_VULN_SUMMARY_FULL](makeCtx({ project_id: 9 })),
+      (err) => err.message.includes('UNAVAILABLE') && err.message.includes('503'),
+    );
+    assert.deepEqual(requested, [
+      `${MOCK_BASE_URL}/api/v1/vuln/summary_type?project_id=9`,
+      `${MOCK_BASE_URL}/api/v1/vuln/summary_level?project_id=9`,
+    ]);
+  });
+
   it('uses an undici dispatcher only when TLS verification is explicitly disabled', async () => {
     globalThis.fetch = mock.fn(async () => createMockResponse({ status: 201, data: [], page: {} }));
     await handlers[METHOD_LIST_VULNS_FULL]({

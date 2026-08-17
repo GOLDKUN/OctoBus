@@ -4,7 +4,7 @@ OctoBus service package for [Huoxian DongTai IAST](https://github.com/HuoxianPub
 
 ## 支持版本
 
-- DongTai IAST >= 1.14.0（测试验证版本：1.14.0）
+- DongTai IAST 1.14.0（当前实现和真实环境验证的支持版本）
 - 兼容所有基于 Token 认证的 DongTai IAST 版本
 
 ## 认证方式
@@ -75,6 +75,14 @@ Token 获取方式：
 | `GetSystemInfo` | 获取系统信息 | 只读操作，无风险 |
 | `ListStrategies` | 获取检测策略列表 | 只读操作，无风险 |
 | `GetScaDetail` | 获取 SCA 组件漏洞详情 | 只读操作，无风险 |
+
+### DongTai 1.14.0 漏洞汇总契约
+
+`GetVulnSummary` 以 DongTai 1.14.0 的真实 API 契约为准：类型维度来自
+`GET /api/v1/vuln/summary_type`，等级维度来自
+`GET /api/v1/vuln/summary_level`。如请求包含 `project_id`，两个请求都会透传该过滤条件。
+两个维度共同组成完整 RPC 响应，任一端点认证、网络或服务端失败都会使 RPC 明确失败，
+不会把缺失一个维度的部分结果伪装成成功响应。
 
 ### 写操作详细说明
 
