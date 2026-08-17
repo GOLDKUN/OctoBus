@@ -66,6 +66,10 @@ const requireString = (value, fieldName) => {
   return text;
 };
 
+const firstNonEmptyString = (...values) => values
+  .map(toTrimmedString)
+  .find((value) => value.length > 0) ?? '';
+
 const mergedBindings = (ctx = {}) => ({
   ...(ctx?.config ?? {}),
   ...(ctx?.secret ?? {}),
@@ -118,16 +122,19 @@ const normalizeBaseUrl = (value) => {
 };
 
 const requireHost = (req, ctx) => {
-  const host = normalizeBaseUrl(firstDefined(
+  const candidates = [
     req?.host,
     ctx?.bindings?.host,
     ctx?.bindings?.restBaseUrl,
     ctx?.bindings?.baseUrl,
     ctx?.bindings?.rest_base_url,
     ctx?.bindings?.base_url,
-  ));
-  if (!host) throw errorWithCode('INVALID_ARGUMENT', 'host is required');
-  return host;
+  ];
+  for (const candidate of candidates) {
+    const host = normalizeBaseUrl(candidate);
+    if (host) return host;
+  }
+  throw errorWithCode('INVALID_ARGUMENT', 'host is required');
 };
 
 const resolveTimeoutMs = (ctx) => {
@@ -332,6 +339,14 @@ const validateLoginJson = (json) => {
   }
 };
 
+const normalizeLoginJson = (json) => {
+  if (isPlainObject(json) && json.success === undefined && toInt64(json.code, -1) === 0 && toTrimmedString(json.token)) {
+    return { success: true, result: { error_code: 'success', token: toTrimmedString(json.token) } };
+  }
+  validateLoginJson(json);
+  return json;
+};
+
 const getSetCookies = (res) => {
   const headers = res?.headers;
   if (headers && typeof headers.getSetCookie === 'function') {
@@ -379,13 +394,13 @@ const extractHeaders = (res) => {
 };
 
 const resolveLoginUsername = (req, ctx) =>
-  requireString(firstDefined(req?.username, ctx?.bindings?.user, ctx?.bindings?.username), 'username');
+  requireString(firstNonEmptyString(req?.username, ctx?.bindings?.user, ctx?.bindings?.username), 'username');
 
 const resolveLoginPassword = (req, ctx) =>
-  requireString(firstDefined(req?.password, ctx?.bindings?.password), 'password');
+  requireString(firstNonEmptyString(req?.password, ctx?.bindings?.password), 'password');
 
 const resolveLogoutUsername = (req, ctx, session) =>
-  requireString(firstDefined(req?.username, session?.username, ctx?.bindings?.user, ctx?.bindings?.username), 'username');
+  requireString(firstNonEmptyString(req?.username, session?.username, ctx?.bindings?.user, ctx?.bindings?.username), 'username');
 
 const NAME_MAX = 63;
 
@@ -504,8 +519,7 @@ const handleLogin = async (req, ctx) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
   });
-  const json = requireJsonBody(upstream.text);
-  validateLoginJson(json);
+  const json = normalizeLoginJson(requireJsonBody(upstream.text));
   const response = toLoginResponse(upstream.status, upstream.text, upstream.res, json);
   const token = toTrimmedString(json?.result?.token);
   if (response.success && response.result.error_code === 'success' && token) {
@@ -613,6 +627,7 @@ export const _test = {
   errorWithCode,
   extractHeaders,
   fetchUpstream,
+  firstNonEmptyString,
   getInstanceKey,
   getInstanceSessionMap,
   getInsecureTlsDispatcher,
@@ -621,6 +636,7 @@ export const _test = {
   mergeCookieHeader,
   buildGetSecPolicyEntry,
   normalizeBaseUrl,
+  normalizeLoginJson,
   normalizeListNames,
   normalizeMoves,
   normalizePolicies,

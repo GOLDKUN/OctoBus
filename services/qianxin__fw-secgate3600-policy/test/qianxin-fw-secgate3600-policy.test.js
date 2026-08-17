@@ -252,6 +252,17 @@ test('Login failure does not cache a session', async () => {
   assert.equal(mod._test.getSession(c, HOST), undefined);
 });
 
+test('Login accepts the documented code/token success variant without exposing its token', async () => {
+  const mod = await loadMod();
+  mod._test.clearAllSessions();
+  const c = ctx({ instance_id: 'code-token-login' });
+  setFetch(() => makeRes(200, { code: 0, token: 'alternate-token' }, ['PHPSESSID=alternate']));
+  const res = await mod.handlers[LOGIN]({}, c);
+  assert.equal(res.success, true);
+  assert.equal(res.result.token, '');
+  assert.equal(mod._test.getSession(c, HOST).token, 'alternate-token');
+});
+
 test('skipTlsVerify + IPv6 host flow through to fetch init', async () => {
   const mod = await loadMod();
   mod._test.sessionCache.clear();
@@ -397,6 +408,7 @@ test('resolveLoginUsername username binding and resolveTimeoutMs edge cases', as
   const headers = _test.buildHeaders({ bindings: { headers: { 'X-Custom': 'val' } } }, { 'Content-Type': 'application/json' });
   assert.equal(headers['X-Custom'], 'val');
   assert.equal(headers['Content-Type'], 'application/json');
+  assert.equal(_test.firstNonEmptyString('', undefined, 'configured'), 'configured');
 });
 
 test('toValue with null inside object and array', async () => {
@@ -539,6 +551,10 @@ test('requireHost: binding fallbacks restBaseUrl and baseUrl', async () => {
 
   setFetch(() => loginOk);
   await mod.handlers[LOGIN]({}, { bindings: { baseUrl: HOST, user: 'u', password: 'p' }, meta: { instance_id: 'inst-bu' } });
+  assert.match(lastReq.url, /\/v1\.0\/login$/);
+
+  setFetch(() => loginOk);
+  await mod.handlers[LOGIN]({}, { bindings: { host: 'not-a-url', baseUrl: HOST, user: 'u', password: 'p' }, meta: { instance_id: 'inst-invalid-primary' } });
   assert.match(lastReq.url, /\/v1\.0\/login$/);
 });
 

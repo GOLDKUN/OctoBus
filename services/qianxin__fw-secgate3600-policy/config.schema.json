@@ -5,6 +5,7 @@
   "properties": {
     "host": {
       "type": "string",
+      "format": "uri",
       "description": "SecGate3600 management base URL with scheme and port, for example https://198.51.100.10:8443."
     },
     "restBaseUrl": {
