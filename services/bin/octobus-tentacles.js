@@ -137,6 +137,10 @@ const services = {
     entryFile: "../prometheus__alertmanager_0-27-0/bin/alertmanager-0-27-0.js",
     serviceModule: "../prometheus__alertmanager_0-27-0/src/service.js",
   },
+  "kubernetes-api": {
+    entryFile: "../kubernetes__kubernetes_api/bin/kubernetes-api.js",
+    serviceModule: "../kubernetes__kubernetes_api/src/service.js",
+  },
   "dptech-eds": {
     entryFile: "../dptech__eds/bin/dptech-eds.js",
     serviceModule: "../dptech__eds/src/service.js",
@@ -552,6 +556,10 @@ const services = {
   "siem": {
     entryFile: "../wazuh__siem/bin/siem.js",
     serviceModule: "../wazuh__siem/src/service.js",
+  },
+  "kubernetes-api": {
+    entryFile: "../kubernetes__kubernetes_api/bin/kubernetes-api.js",
+    serviceModule: "../kubernetes__kubernetes_api/src/service.js",
   },
 };
 
