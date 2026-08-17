@@ -961,6 +961,45 @@ test('list mappers handle missing keys', () => {
   assert.deepEqual(_test.mapProjects({ projects: null }), []);
 });
 
+test('fetchAllPages follows relative OpenStack next links and combines records', async () => {
+  const requested = [];
+  setFetch(async (url) => {
+    requested.push(String(url));
+    if (requested.length === 1) {
+      return responseOf(200, {
+        servers: [{ id: 'server-1' }],
+        servers_links: [{ rel: 'next', href: '/v2.1/project/servers?marker=server-1' }],
+      });
+    }
+    return responseOf(200, { servers: [{ id: 'server-2' }], servers_links: [] });
+  });
+  const records = await _test.fetchAllPages(
+    buildCtx(),
+    'https://compute.example.com/v2.1/project/servers?limit=1000',
+    TOKEN,
+    'ListServers',
+    'servers',
+    ['servers_links'],
+  );
+  assert.deepEqual(records, [{ id: 'server-1' }, { id: 'server-2' }]);
+  assert.deepEqual(requested, [
+    'https://compute.example.com/v2.1/project/servers?limit=1000',
+    'https://compute.example.com/v2.1/project/servers?marker=server-1',
+  ]);
+});
+
+test('pagination refuses cross-origin next links to protect the scoped token', () => {
+  assert.throws(
+    () => _test.nextPageUrl(
+      { links: { next: 'https://attacker.example/servers?page=2' } },
+      'https://compute.example.com/servers?page=1',
+      'https://compute.example.com',
+      ['links'],
+    ),
+    (err) => err instanceof GrpcError && err.legacyCode === 'FAILED_PRECONDITION',
+  );
+});
+
 test('GetServer invalid server_id propagates to NOT_FOUND via mock 404', async () => {
   const mock = createMockServer();
   const baseUrl = await mock.start();

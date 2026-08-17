@@ -92,10 +92,9 @@ A two-step Keystone token flow is used:
 - `OpenStack_Yoga_2022_1.OpenStack_Yoga_2022_1/ListVolumes`
 - `OpenStack_Yoga_2022_1.OpenStack_Yoga_2022_1/ListFlavors`
 
-List methods request up to 1,000 records from the upstream API. They currently
-return one upstream page; deployments with more than 1,000 matching resources
-should narrow the request filters or query OpenStack directly for exhaustive
-pagination.
+List methods request pages of up to 1,000 records and follow the standard
+OpenStack `next` links. Pagination is restricted to the initial endpoint origin
+and at most 100 pages to prevent credential forwarding and pagination loops.
 
 ## Behavior
 

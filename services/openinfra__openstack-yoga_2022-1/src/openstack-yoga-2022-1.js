@@ -202,6 +202,7 @@ const fetchHttp = async (url, init = {}, ctx = {}) => {
   try {
     res = await fetch(url, { signal: controller.signal, redirect: 'error', ...buildTlsOptions(bindings, url), ...init });
   } catch (err) {
+    clearTimeout(timer);
     const errMsg = err?.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : 'upstream unavailable';
     throw engineError('UNAVAILABLE', `upstream fetch failed: ${errMsg}`);
   }
@@ -340,6 +341,54 @@ const buildQueryString = (params = {}) => {
   const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '');
   if (!entries.length) return '';
   return '?' + entries.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join('&');
+};
+
+const nextPageUrl = (json, currentUrl, initialOrigin, linkKeys) => {
+  let raw = '';
+  for (const key of linkKeys) {
+    const links = json?.[key];
+    if (Array.isArray(links)) {
+      raw = toTrimmedString(links.find((link) => link?.rel === 'next')?.href);
+    } else if (links && typeof links === 'object') {
+      raw = toTrimmedString(links.next);
+    }
+    if (raw) break;
+  }
+  if (!raw) return '';
+  try {
+    const resolved = new URL(raw, currentUrl);
+    if (resolved.origin !== initialOrigin || !['http:', 'https:'].includes(resolved.protocol)) {
+      throw engineError('FAILED_PRECONDITION', 'upstream pagination next link must remain on the same origin');
+    }
+    return resolved.toString();
+  } catch (err) {
+    if (err instanceof GrpcError) throw err;
+    throw engineError('FAILED_PRECONDITION', 'upstream pagination next link is invalid');
+  }
+};
+
+const fetchAllPages = async (callCtx, initialUrl, token, label, collectionKey, linkKeys) => {
+  const initialOrigin = new URL(initialUrl).origin;
+  const seen = new Set();
+  const records = [];
+  let url = initialUrl;
+  for (let page = 0; page < 100; page += 1) {
+    if (seen.has(url)) throw engineError('FAILED_PRECONDITION', `${label} pagination link loop detected`);
+    seen.add(url);
+    logFlow(callCtx, `${label}:request`, { url });
+    const { httpStatus, rawBody } = await fetchHttp(url, {
+      method: 'GET',
+      headers: buildUpstreamHeaders(token),
+    }, callCtx);
+    assertUpstreamStatus(httpStatus, rawBody, label);
+    let json;
+    try { json = rawBody ? JSON.parse(rawBody) : {}; }
+    catch { throw engineError('UNKNOWN', `${label} response is not valid JSON`); }
+    if (Array.isArray(json?.[collectionKey])) records.push(...json[collectionKey]);
+    url = nextPageUrl(json, url, initialOrigin, linkKeys);
+    if (!url) return records;
+  }
+  throw engineError('FAILED_PRECONDITION', `${label} pagination exceeds 100 pages`);
 };
 
 const performAuthenticatedGet = async (callCtx, pathTemplate, params = {}, label = 'api', cachedTokenCtx = null) => {
@@ -584,14 +633,8 @@ const handleListProjects = async (req = {}, ctx = {}) => {
   requirePassword(callCtx);
   const tokenCtx = await obtainToken(callCtx);
   const url = `${tokenCtx.authUrl}/v3/projects?limit=1000`;
-  const headers = buildUpstreamHeaders(tokenCtx.token);
-  logFlow(callCtx, 'ListProjects:request', { url });
-  const { httpStatus, rawBody } = await fetchHttp(url, { method: 'GET', headers }, callCtx);
-  assertUpstreamStatus(httpStatus, rawBody, 'ListProjects');
-  let projectsJson = {};
-  try { projectsJson = rawBody ? JSON.parse(rawBody) : {}; }
-  catch { throw engineError('UNKNOWN', `ListProjects response is not valid JSON: ${rawBody.slice(0, 128)}`); }
-  return { projects: mapProjects(projectsJson) };
+  const projects = await fetchAllPages(callCtx, url, tokenCtx.token, 'ListProjects', 'projects', ['links', 'projects_links']);
+  return { projects: mapProjects({ projects }) };
 };
 
 const handleListServers = async (req = {}, ctx = {}) => {
@@ -607,14 +650,8 @@ const handleListServers = async (req = {}, ctx = {}) => {
   const queryString = Object.entries(params).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
   const suffix = queryString ? `?${queryString}` : '';
   const url = serviceUrl(tokenCtx, 'compute', `/v2/${encodeURIComponent(projectId)}/servers${suffix}`, `/servers${suffix}`, resolveRegion(callCtx.bindings), projectId);
-  const headers = buildUpstreamHeaders(tokenCtx.token);
-  logFlow(callCtx, 'ListServers:request', { url, projectId });
-  const { httpStatus, rawBody } = await fetchHttp(url, { method: 'GET', headers }, callCtx);
-  assertUpstreamStatus(httpStatus, rawBody, 'ListServers');
-  let serversJson = {};
-  try { serversJson = rawBody ? JSON.parse(rawBody) : {}; }
-  catch { throw engineError('UNKNOWN', `ListServers response is not valid JSON: ${rawBody.slice(0, 128)}`); }
-  return { servers: mapServers(serversJson) };
+  const servers = await fetchAllPages(callCtx, url, tokenCtx.token, 'ListServers', 'servers', ['servers_links', 'links']);
+  return { servers: mapServers({ servers }) };
 };
 
 const handleGetServer = async (req = {}, ctx = {}) => {
@@ -648,14 +685,8 @@ const handleListNetworks = async (req = {}, ctx = {}) => {
   const queryString = buildQueryString(queryParams);
   const path = substitutePath('/v2.0/networks', pathParams);
   const url = serviceUrl(tokenCtx, 'network', `${path}${queryString}`, `/v2.0/networks${queryString}`, resolveRegion(callCtx.bindings), projectId);
-  const headers = buildUpstreamHeaders(tokenCtx.token);
-  logFlow(callCtx, 'ListNetworks:request', { url, projectId });
-  const { httpStatus, rawBody } = await fetchHttp(url, { method: 'GET', headers }, callCtx);
-  assertUpstreamStatus(httpStatus, rawBody, 'ListNetworks');
-  let json = {};
-  try { json = rawBody ? JSON.parse(rawBody) : {}; }
-  catch { throw engineError('UNKNOWN', `ListNetworks response is not valid JSON: ${rawBody.slice(0, 128)}`); }
-  return { networks: mapNetworks(json) };
+  const networks = await fetchAllPages(callCtx, url, tokenCtx.token, 'ListNetworks', 'networks', ['networks_links', 'links']);
+  return { networks: mapNetworks({ networks }) };
 };
 
 const handleListVolumes = async (req = {}, ctx = {}) => {
@@ -672,14 +703,8 @@ const handleListVolumes = async (req = {}, ctx = {}) => {
   const queryString = buildQueryString(queryParams);
   const path = substitutePath('/v3/{project_id}/volumes', pathParams);
   const url = serviceUrl(tokenCtx, 'volumev3', `${path}${queryString}`, `/volumes${queryString}`, resolveRegion(callCtx.bindings), projectId);
-  const headers = buildUpstreamHeaders(tokenCtx.token);
-  logFlow(callCtx, 'ListVolumes:request', { url, projectId });
-  const { httpStatus, rawBody } = await fetchHttp(url, { method: 'GET', headers }, callCtx);
-  assertUpstreamStatus(httpStatus, rawBody, 'ListVolumes');
-  let json = {};
-  try { json = rawBody ? JSON.parse(rawBody) : {}; }
-  catch { throw engineError('UNKNOWN', `ListVolumes response is not valid JSON: ${rawBody.slice(0, 128)}`); }
-  return { volumes: mapVolumes(json) };
+  const volumes = await fetchAllPages(callCtx, url, tokenCtx.token, 'ListVolumes', 'volumes', ['volumes_links', 'links']);
+  return { volumes: mapVolumes({ volumes }) };
 };
 
 const handleListFlavors = async (req = {}, ctx = {}) => {
@@ -688,12 +713,8 @@ const handleListFlavors = async (req = {}, ctx = {}) => {
   const tokenCtx = await obtainToken(callCtx);
   const projectId = projectIdOverride || tokenCtx.projectId;
   const url = serviceUrl(tokenCtx, 'compute', `/v2/${encodeURIComponent(projectId)}/flavors?limit=1000`, '/flavors?limit=1000', resolveRegion(callCtx.bindings), projectId);
-  const headers = buildUpstreamHeaders(tokenCtx.token);
-  const { httpStatus, rawBody } = await fetchHttp(url, { method: 'GET', headers }, callCtx);
-  assertUpstreamStatus(httpStatus, rawBody, 'ListFlavors');
-  let json;
-  try { json = rawBody ? JSON.parse(rawBody) : {}; } catch { throw engineError('UNKNOWN', 'ListFlavors response is not valid JSON'); }
-  return { flavors: mapFlavors(json) };
+  const flavors = await fetchAllPages(callCtx, url, tokenCtx.token, 'ListFlavors', 'flavors', ['flavors_links', 'links']);
+  return { flavors: mapFlavors({ flavors }) };
 };
 
 export function rpcdef(ctx = {}) {
@@ -736,6 +757,7 @@ export const _test = {
   engineError,
   fetchHttp,
   firstDefined,
+  fetchAllPages,
   getServerId: requireServerId,
   grpcCodeFor,
   handleGetServer,
@@ -757,6 +779,7 @@ export const _test = {
   mapVolumes,
   mergedBindings,
   normalizeAuthUrl,
+  nextPageUrl,
   obtainToken,
   pickProjectIdOverride,
   performAuthenticatedGet,
