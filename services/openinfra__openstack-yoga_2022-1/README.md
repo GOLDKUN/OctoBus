@@ -79,9 +79,9 @@ A two-step Keystone token flow is used:
    from the response body and used as the `{project_id}` path segment for Compute
    and Block Storage endpoints.
 
-> NOTE: For the scaffold, every handler re-fetches a token (no caching). A future improvement is to add a per-(username, project, lifetime) token cache once upstream token expiry (`token.expires_at`) is consumed.
-> marks the spot where a per-(username, project, lifetime) token cache should be
-> inserted when the upstream supports token expiry.
+> NOTE: Every handler currently re-fetches a token (no caching). A future
+> improvement could add a per-(username, project, lifetime) token cache using
+> the upstream token expiry (`token.expires_at`).
 
 ## RPC Methods
 

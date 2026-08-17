@@ -206,36 +206,36 @@ const fetchHttp = async (url, init = {}, ctx = {}) => {
     throw engineError('UNAVAILABLE', `upstream fetch failed: ${errMsg}`);
   }
   try {
-  const httpStatus = Number(res?.status || 0);
-  const maximum = resolveMaxResponseBytes(ctx);
-  const declared = Number(res?.headers?.get?.('content-length') || 0);
-  if (Number.isFinite(declared) && declared > maximum) throw engineError('UNAVAILABLE', 'upstream response is too large');
-  let text = '';
-  try {
-    if (typeof res?.body?.getReader === 'function') {
-      const reader = res.body.getReader();
-      const chunks = [];
-      let received = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        received += value.byteLength;
-        if (received > maximum) {
-          await reader.cancel();
-          throw engineError('UNAVAILABLE', 'upstream response is too large');
+    const httpStatus = Number(res?.status || 0);
+    const maximum = resolveMaxResponseBytes(ctx);
+    const declared = Number(res?.headers?.get?.('content-length') || 0);
+    if (Number.isFinite(declared) && declared > maximum) throw engineError('UNAVAILABLE', 'upstream response is too large');
+    let text = '';
+    try {
+      if (typeof res?.body?.getReader === 'function') {
+        const reader = res.body.getReader();
+        const chunks = [];
+        let received = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          received += value.byteLength;
+          if (received > maximum) {
+            await reader.cancel();
+            throw engineError('UNAVAILABLE', 'upstream response is too large');
+          }
+          chunks.push(Buffer.from(value));
         }
-        chunks.push(Buffer.from(value));
+        text = Buffer.concat(chunks).toString('utf8');
+      } else {
+        text = await res.text();
+        if (Buffer.byteLength(text) > maximum) throw engineError('UNAVAILABLE', 'upstream response is too large');
       }
-      text = Buffer.concat(chunks).toString('utf8');
-    } else {
-      text = await res.text();
-      if (Buffer.byteLength(text) > maximum) throw engineError('UNAVAILABLE', 'upstream response is too large');
+    } catch (err) {
+      if (err instanceof GrpcError) throw err;
+      throw engineError('UNAVAILABLE', `upstream response read failed: ${err?.message || 'read error'}`);
     }
-  } catch (err) {
-    if (err instanceof GrpcError) throw err;
-    throw engineError('UNAVAILABLE', `upstream response read failed: ${err?.message || 'read error'}`);
-  }
-  return { res, httpStatus, rawBody: String(text ?? '') };
+    return { res, httpStatus, rawBody: String(text ?? '') };
   } finally {
     clearTimeout(timer);
   }
