@@ -469,10 +469,10 @@ const handleBulkGetSavedObjects = async (req = {}, ctx = {}) => {
   const baseUrl = requireBaseUrl(callCtx);
   const objects = Array.isArray(req.objects) ? req.objects : [];
   if (objects.length === 0) throw errorWithCode('INVALID_ARGUMENT', 'at least one object is required');
-  const body = { objects: objects.map((o) => ({ type: toTrimmedString(o?.type), id: toTrimmedString(o?.id) })) };
+  const body = objects.map((o) => ({ type: toTrimmedString(o?.type), id: toTrimmedString(o?.id) }));
   const space = toTrimmedString(req.space);
   const url = buildUrl(baseUrl, '/api/saved_objects/_bulk_get', {}, space);
-  logFlow(callCtx, 'BulkGetSavedObjects', { url, count: body.objects.length });
+  logFlow(callCtx, 'BulkGetSavedObjects', { url, count: body.length });
   const headers = { ...buildHeaders(callCtx), 'Content-Type': 'application/json' };
   const result = await executeRequest(url, callCtx, { method: 'POST', headers, body: JSON.stringify(body), action: 'BulkGetSavedObjects' });
   ensureSuccess(result, 'BulkGetSavedObjects');
@@ -498,14 +498,15 @@ const handleExportSavedObjects = async (req = {}, ctx = {}) => {
   const type = toTrimmedString(req.type);
   if (!type) throw errorWithCode('INVALID_ARGUMENT', 'type is required');
   const bodyObj = {
-    type,
-    ...(req.include_references_deep ? { includeReferencesDeep: true } : {}),
+    ...(toBool(req.include_references_deep, false) ? { includeReferencesDeep: true } : {}),
   };
   if (Array.isArray(req.objects) && req.objects.length > 0) {
     bodyObj.objects = req.objects.map((o) => {
       if (typeof o === 'object' && o !== null) return { type: toTrimmedString(o.type), id: toTrimmedString(o.id) };
       return { type, id: String(o) };
     });
+  } else {
+    bodyObj.type = type;
   }
   const space = toTrimmedString(req.space);
   const url = buildUrl(baseUrl, '/api/saved_objects/_export', {}, space);
@@ -521,6 +522,7 @@ const handleExportSavedObjects = async (req = {}, ctx = {}) => {
   const lines = body.split('\n').filter((line) => line.trim());
   let exportedCount = 0;
   let sawExportedCountField = false;
+  let objectCount = 0;
   const missingRefs = [];
   for (const line of lines) {
     const parsed = tryParseJson(line);
@@ -534,12 +536,13 @@ const handleExportSavedObjects = async (req = {}, ctx = {}) => {
         missingRefs.push(`${ref.type}:${ref.id}`);
       }
     }
-    if (parsed.value.id) exportedCount++;
+    if (parsed.value.id) objectCount++;
   }
+  if (!sawExportedCountField) exportedCount = objectCount;
   return {
     ndjson: body,
-    total_count: lines.length,
-    exported_count: sawExportedCountField ? exportedCount : lines.filter((l) => l.includes('"id"')).length,
+    total_count: exportedCount,
+    exported_count: exportedCount,
     missing_refs: missingRefs,
   };
 };

@@ -185,7 +185,7 @@ test('tryParseJson failure and ensureSuccess error mapping', () => {
   try { _test.ensureSuccess({ httpStatus: 401, httpBody: 'denied' }, 'Test'); assert.fail('expected error'); } catch (e) { assert.equal(e.legacyCode, 'PERMISSION_DENIED'); }
 });
 
-test('BulkGetSavedObjects uses Kibana object envelope and a URL space prefix', async () => {
+test('BulkGetSavedObjects uses Kibana 7.10 array body and a URL space prefix', async () => {
   const mock = createMockServer();
   const baseUrl = await mock.start();
   try {
@@ -194,7 +194,7 @@ test('BulkGetSavedObjects uses Kibana object envelope and a URL space prefix', a
       buildCtx({ config: { baseUrl } }),
     );
     assert.equal(mock.requests.at(-1).path, '/s/custom%20space/api/saved_objects/_bulk_get');
-    assert.deepEqual(mock.requests.at(-1).body, { objects: [{ type: 'dashboard', id: 'obj-1' }] });
+    assert.deepEqual(mock.requests.at(-1).body, [{ type: 'dashboard', id: 'obj-1' }]);
   } finally { await mock.close(); }
 });
 
@@ -316,7 +316,24 @@ test('saved-object references and export metadata map every response branch', as
   assert.deepEqual(object.references, [{ name: 'ref', type: 'index-pattern', id: 'pattern-1' }]);
   const exported = await handlers['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/ExportSavedObjects']({ type: 'dashboard' }, ctx);
   assert.equal(exported.exported_count, 0, 'explicit exportedCount=0 is not replaced with a line-count fallback');
+  assert.equal(exported.total_count, 0, 'summary lines are not counted as exported objects');
   assert.deepEqual(exported.missing_refs, ['dashboard:missing']);
+});
+
+test('ExportSavedObjects normalizes text booleans and sends either type or objects', async () => {
+  const bodies = [];
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return new Response('{"id":"obj-1"}\n', { status: 200 });
+  };
+  const method = handlers['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/ExportSavedObjects'];
+  const byType = await method({ type: 'dashboard', include_references_deep: 'false' }, buildCtx());
+  const byObjects = await method({ type: 'dashboard', objects: ['obj-1'], include_references_deep: 'true' }, buildCtx());
+  assert.deepEqual(bodies[0], { type: 'dashboard' });
+  assert.deepEqual(bodies[1], { objects: [{ type: 'dashboard', id: 'obj-1' }], includeReferencesDeep: true });
+  assert.equal(byType.total_count, 1);
+  assert.equal(byType.exported_count, 1);
+  assert.equal(byObjects.total_count, 1);
 });
 
 test('legacy rpcdef exposes all seven deterministic routes', async () => {

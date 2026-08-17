@@ -72,7 +72,8 @@ export function createMockServer({ expectedUser = DEFAULT_USER, expectedPassword
 
     if (req.method === 'POST' && routePath === '/api/saved_objects/_bulk_get') {
       const parsed = entry.body;
-      const items = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.objects) ? parsed.objects : []);
+      if (!Array.isArray(parsed)) { sendJson(res, 400, { statusCode: 400, error: 'Bad Request' }); return; }
+      const items = parsed;
       const results = items.map((item) => ({ id: item?.id || 'unknown', type: item?.type || 'unknown', version: 1, updated_at: '2026-01-01T00:00:00.000Z', attributes: { title: 'Test' }, references: [], migrationVersion: {}, coreMigrationVersion: '7.10.0' }));
       sendJson(res, 200, { saved_objects: results });
       return;
