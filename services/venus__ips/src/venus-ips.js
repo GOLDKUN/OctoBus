@@ -277,18 +277,27 @@ const rowTitles = (rowHtml) => {
 // 解析 HTML 日志页为结构化条目:数据行需含时间且至少 13 个 title 单元格。
 const parseIpsLog = (html, limit = 0) => {
   const entries = [];
+  let structuralRows = 0;
+  let skipped = 0;
   const rowRe = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
   let m;
   while ((m = rowRe.exec(html)) !== null) {
     const titles = rowTitles(m[1]);
-    if (titles.length !== ENTRY_FIELDS.length) continue;
-    if (!DATETIME_RE.test(titles[6] ?? '')) continue;
+    // Header rows have no titled data cells. Any titled row is a candidate log row and
+    // must have exactly 14 columns with the timestamp at index 6; fail closed upstream
+    // if a candidate is malformed so callers never receive a silently incomplete list.
+    if (titles.length === 0) continue;
+    structuralRows += 1;
+    if (titles.length !== ENTRY_FIELDS.length || !DATETIME_RE.test(titles[6] ?? '')) {
+      skipped += 1;
+      continue;
+    }
     const entry = {};
     ENTRY_FIELDS.forEach((key, i) => { entry[key] = titles[i] ?? ''; });
     entries.push(entry);
     if (limit > 0 && entries.length >= limit) break;
   }
-  return entries;
+  return { entries, skipped, structuralRows };
 };
 
 const runQueryIpsLog = async (req = {}, ctx = {}) => {
@@ -325,7 +334,11 @@ const runQueryIpsLog = async (req = {}, ctx = {}) => {
   if (!String(text || '').includes(LOG_PAGE_MARKER)) {
     throw errorWithCode('FAILED_PRECONDITION', 'unexpected response (session may be expired or not the IPS log page)');
   }
-  const entries = parseIpsLog(text, limit);
+  const parsed = parseIpsLog(text, limit);
+  if (parsed.skipped > 0) {
+    throw errorWithCode('FAILED_PRECONDITION', 'unexpected IPS log table structure');
+  }
+  const { entries } = parsed;
   return { http_status: status, total: entries.length, entries };
 };
 

@@ -9,6 +9,7 @@ import {
   METHOD_PROBE_CONNECTIVITY_FULL,
   METHOD_QUERY_IPS_LOG_FULL,
   IPS_LOG_URI,
+  LOG_PAGE_MARKER,
   _test,
   handlers,
   rpcdef,
@@ -202,6 +203,18 @@ test('valid log page with zero data rows returns empty entries', async () => {
   assert.deepEqual(out.entries, []);
 });
 
+test('malformed candidate log rows fail closed instead of returning incomplete data', async () => {
+  const ctx = buildCtx({ host: 'https://ips', cookie: 'c=1' });
+  const titledCells = (count, timeIndex) => '<tr>' + Array.from(
+    { length: count },
+    (_, i) => `<td title="${i === timeIndex ? '2026-01-02 03:04:05' : `x${i}`}">x</td>`,
+  ).join('') + '</tr>';
+  for (const row of [titledCells(15, 7), titledCells(13, 6), titledCells(14, 5)]) {
+    withFetch(async () => fakeResponse(200, `<html>${LOG_PAGE_MARKER}<table><tr><th>header</th></tr>${row}</table></html>`));
+    await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'FAILED_PRECONDITION');
+  }
+});
+
 test('response size and read failures are bounded and redacted', async () => {
   const ctx = buildCtx({ host: 'https://ips', cookie: 'c=1' }, { bindings: { maxResponseBytes: 1024 } });
   withFetch(async () => ({ status: 200, ok: true, headers: createHeaders({ 'content-length': '2048' }), text: async () => 'not read' }));
@@ -260,22 +273,23 @@ test('helper coverage', () => {
   const html = '<tr><th>h</th></tr>'
     + '<tr><td>#</td>' + Array.from({ length: 14 }, (_, i) => `<td title="v${i}">v${i}</td>`).join('').replace('v6', '2026-01-02 03:04:05') + '</tr>';
   const parsed = h.parseIpsLog(html);
-  assert.equal(parsed.length, 1);
-  assert.equal(parsed[0].name, 'v0');
-  assert.equal(parsed[0].time, '2026-01-02 03:04:05');
+  assert.equal(parsed.entries.length, 1);
+  assert.equal(parsed.entries[0].name, 'v0');
+  assert.equal(parsed.entries[0].time, '2026-01-02 03:04:05');
+  assert.deepEqual({ skipped: parsed.skipped, structuralRows: parsed.structuralRows }, { skipped: 0, structuralRows: 1 });
   // a row without a datetime is skipped
-  assert.equal(h.parseIpsLog('<tr>' + Array.from({ length: 14 }, (_, i) => `<td title="x${i}">x</td>`).join('') + '</tr>').length, 0);
+  assert.equal(h.parseIpsLog('<tr>' + Array.from({ length: 14 }, (_, i) => `<td title="x${i}">x</td>`).join('') + '</tr>').skipped, 1);
   // Extra/missing titled cells and a datetime in the wrong column must not silently shift fields.
   const titledCells = (count, timeIndex) => '<tr>' + Array.from(
     { length: count },
     (_, i) => `<td title="${i === timeIndex ? '2026-01-02 03:04:05' : `x${i}`}">x</td>`,
   ).join('') + '</tr>';
-  assert.equal(h.parseIpsLog(titledCells(15, 7)).length, 0);
-  assert.equal(h.parseIpsLog(titledCells(13, 6)).length, 0);
-  assert.equal(h.parseIpsLog(titledCells(14, 5)).length, 0);
+  assert.equal(h.parseIpsLog(titledCells(15, 7)).skipped, 1);
+  assert.equal(h.parseIpsLog(titledCells(13, 6)).skipped, 1);
+  assert.equal(h.parseIpsLog(titledCells(14, 5)).skipped, 1);
   // limit
   const two = '<tr>' + Array.from({ length: 14 }, (_, i) => `<td title="${i === 6 ? '2026-01-02 03:04:05' : 'a'}">a</td>`).join('') + '</tr>';
-  assert.equal(h.parseIpsLog(two + two, 1).length, 1);
+  assert.equal(h.parseIpsLog(two + two, 1).entries.length, 1);
 
   assert.equal(h.pickInt({ a: '5' }, ['a'], 0), 5);
   assert.equal(h.pickInt({ a: '' }, ['a'], 9), 9);
