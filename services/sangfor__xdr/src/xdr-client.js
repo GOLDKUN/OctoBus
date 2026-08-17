@@ -2,7 +2,7 @@
  * 深信服 XDR API 客户端工厂
  */
 
-import { createSign } from "./sangfor-sign.js";
+import { canonicalizeQuery, createSign } from "./sangfor-sign.js";
 import { GrpcError, grpcStatus } from "@chaitin-ai/octobus-sdk";
 
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj ?? {}, key);
@@ -10,6 +10,12 @@ const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj ?? {}, key
 const firstDefined = (...values) => values.find((v) => v !== undefined && v !== null);
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 300_000;
+const RESERVED_HEADERS = new Set([
+  "authorization",
+  "sdk-content-type",
+  "sdk-host",
+  "sign-date",
+]);
 
 const unwrapString = (value) => {
   if (value === undefined || value === null) return "";
@@ -53,7 +59,11 @@ const resolveHeaders = (config = {}) => {
   }
   return Object.fromEntries(Object.entries(config.headers).map(([key, value]) => {
     if (typeof value !== "string") throw new Error(`header ${key} must be a string`);
-    return [key.toLowerCase(), value];
+    const normalizedKey = key.toLowerCase();
+    if (RESERVED_HEADERS.has(normalizedKey)) {
+      throw new Error(`header ${key} is reserved for XDR request signing`);
+    }
+    return [normalizedKey, value];
   }));
 };
 
@@ -105,18 +115,18 @@ export async function signedRequest({ config, secret, method, path, body }) {
 
   const url = new URL(path, baseUrl);
   const uri = url.pathname;
-  const queryString = url.search ? url.search.slice(1) : "";
+  const queryString = canonicalizeQuery(url.search ? url.search.slice(1) : "");
+  url.search = queryString;
   const host = url.host;
   const payload = body ? JSON.stringify(body) : "";
 
-  const signHeaders = createSign({ ak, sk, method: method.toUpperCase(), uri, queryString, host, payload, headers: configuredHeaders });
-
   const headers = {
     ...configuredHeaders,
-    "Content-Type": "application/json",
-    Accept: "application/json",
-    ...signHeaders,
+    "content-type": "application/json",
+    accept: "application/json",
   };
+  const signHeaders = createSign({ ak, sk, method: method.toUpperCase(), uri, queryString, host, payload, headers });
+  Object.assign(headers, signHeaders);
 
   const fetchOptions = {
     method: method.toUpperCase(),

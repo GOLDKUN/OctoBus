@@ -291,6 +291,7 @@ describe("complete handler and client coverage", () => {
     const signed = createSign({ ak: "ak", sk: "sk", method: "get", uri: "/api", queryString: "b=2&a=1", host: "xdr.example", payload: "{}", headers: { "x-extra": "yes" } });
     assert.match(signed.Authorization, /HMAC-SHA256/);
     assert.strictEqual(canonicalizeQuery("keyword=%E4%B8%AD%E6%96%87%20a%2Bb%26c%3Dd&z=1"), "keyword=%E4%B8%AD%E6%96%87%20a%2Bb%26c%3Dd&z=1");
+    assert.strictEqual(canonicalizeQuery("name=O%27Brien%20%21%28x%29"), "name=O%27Brien%20%21%28x%29");
     assert.strictEqual(isSignExpired({}), true);
     assert.strictEqual(isSignExpired({ "sign-date": "20000101T000000Z" }), true);
 
@@ -323,7 +324,23 @@ describe("complete handler and client coverage", () => {
       });
       assert.strictEqual(captured.url, "https://xdr.example/api/xdr/v1/incident/u-1/disposalTabs?entityType=host");
       assert.strictEqual(captured.init.headers["x-tenant"], "tenant-1");
+      assert.strictEqual(captured.init.headers.accept, "application/json");
+      assert.strictEqual(captured.init.headers["content-type"], "application/json");
       assert.ok(captured.init.signal instanceof AbortSignal);
+      await signedRequest({
+        config: { endpoint: "https://xdr.example", headers: { Accept: "application/xml" } },
+        secret: { ak: "ak", sk: "sk" }, method: "GET",
+        path: "/api?keyword=a+b&name=O%27Brien%20%21%28x%29",
+      });
+      assert.strictEqual(captured.url, "https://xdr.example/api?keyword=a%20b&name=O%27Brien%20%21%28x%29");
+      assert.strictEqual(captured.init.headers.accept, "application/json");
+      await assert.rejects(
+        signedRequest({
+          config: { endpoint: "https://xdr.example", headers: { Authorization: "override" } },
+          secret: { ak: "ak", sk: "sk" }, method: "GET", path: "/api",
+        }),
+        /reserved/,
+      );
       await service.handlers["sangfor_xdr.IncidentService/GetDisposalTabs"](
         { uuid: "u-1", entityType: "host" },
         { config: { endpoint: "https://xdr.example" }, secret: { ak: "ak", sk: "sk" } },

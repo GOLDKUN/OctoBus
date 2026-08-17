@@ -25,10 +25,19 @@ export function canonicalizeQuery(queryString) {
   const params = new URLSearchParams(queryString);
   const entries = [];
   for (const [key, value] of params.entries()) {
-    entries.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+    entries.push(`${percentEncode(key)}=${percentEncode(value)}`);
   }
   entries.sort();
   return entries.join("&");
+}
+
+// encodeURIComponent leaves !'()* unescaped, while the Go SDK's RFC 3986
+// canonical query encoder escapes them. Use one representation for signing
+// and for the request URL so the appliance can reconstruct the same string.
+function percentEncode(value) {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) =>
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  );
 }
 
 function sortHeaders(headerObj) {
