@@ -169,7 +169,11 @@ const encodeQueryPairs = (query = {}) => {
   const parts = [];
   for (const [key, value] of Object.entries(query)) {
     if (value === undefined || value === null || value === '') continue;
-    parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+    const values = Array.isArray(value) ? value : [value];
+    for (const item of values) {
+      if (item === undefined || item === null || item === '') continue;
+      parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(item))}`);
+    }
   }
   return parts.join('&');
 };
@@ -401,7 +405,7 @@ const handleFindSavedObjects = async (req = {}, ctx = {}) => {
     ...(req.sort_order ? { sort_order: toTrimmedString(req.sort_order) } : {}),
   };
   if (Array.isArray(req.fields) && req.fields.length > 0) {
-    params.fields = req.fields.map(String).join(',');
+    params.fields = req.fields.map(toTrimmedString).filter(Boolean);
   }
   const space = toTrimmedString(req.space);
   const url = buildUrl(baseUrl, '/api/saved_objects/_find', params, space);
@@ -415,7 +419,7 @@ const handleFindSavedObjects = async (req = {}, ctx = {}) => {
     type: toTrimmedString(so?.type),
     updated_at: toTrimmedString(so?.updated_at),
     created_at: toTrimmedString(firstDefined(so?.created_at, so?.createdAt)),
-    version: toFiniteInt(firstDefined(so?.version, so?._version)),
+    version: toTrimmedString(firstDefined(so?.version, so?._version)),
     raw_json: toJsonString(so),
     references: (Array.isArray(so?.references) ? so.references : []).map((r) => ({
       name: toTrimmedString(r?.name),
@@ -449,7 +453,7 @@ const handleGetSavedObject = async (req = {}, ctx = {}) => {
   return {
     id: toTrimmedString(json?.id),
     type: toTrimmedString(json?.type),
-    version: toFiniteInt(firstDefined(json?.version, json?._version)),
+    version: toTrimmedString(firstDefined(json?.version, json?._version)),
     updated_at: toTrimmedString(json?.updated_at),
     created_at: toTrimmedString(firstDefined(json?.created_at, json?.createdAt)),
     attributes_json: toJsonString(json?.attributes),
@@ -480,7 +484,7 @@ const handleBulkGetSavedObjects = async (req = {}, ctx = {}) => {
   const savedObjects = (json?.saved_objects || []).map((so) => ({
     id: toTrimmedString(so?.id),
     type: toTrimmedString(so?.type),
-    version: toFiniteInt(firstDefined(so?.version, so?._version)),
+    version: toTrimmedString(firstDefined(so?.version, so?._version)),
     updated_at: toTrimmedString(so?.updated_at),
     created_at: toTrimmedString(firstDefined(so?.created_at, so?.createdAt)),
     attributes_json: toJsonString(so?.attributes),

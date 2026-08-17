@@ -75,7 +75,7 @@ message SavedObjectMeta {
   string type = 2;
   string updated_at = 3;
   string created_at = 4;
-  int32 version = 5;
+  string version = 5;
   string raw_json = 6;
   repeated SavedObjectReference references = 7;
 }
@@ -97,7 +97,7 @@ message GetSavedObjectRequest {
 message GetSavedObjectResponse {
   string id = 1;
   string type = 2;
-  int32 version = 3;
+  string version = 3;
   string updated_at = 4;
   string created_at = 5;
   string attributes_json = 6;

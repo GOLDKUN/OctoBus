@@ -94,6 +94,7 @@ test('FindSavedObjects with sort fields', async () => {
       buildCtx({ config: { baseUrl } }),
     );
     assert.ok(result.total >= 0);
+    assert.deepEqual(mock.requests.at(-1).queryAll.fields, ['title', 'type']);
   } finally { await mock.close(); }
 });
 
@@ -109,6 +110,7 @@ test('GetSavedObject returns object', async () => {
     const result = await handlers['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetSavedObject']({ type: 'dashboard', id: 'obj-1' }, buildCtx({ config: { baseUrl } }));
     assert.equal(result.id, 'obj-1');
     assert.equal(result.type, 'dashboard');
+    assert.equal(result.version, 'WzEsMV0=');
     assert.ok(result.attributes_json.includes('Test Object'));
   } finally { await mock.close(); }
 });
@@ -123,6 +125,7 @@ test('BulkGetSavedObjects batch-fetches objects', async () => {
     );
     assert.equal(result.saved_objects.length, 2);
     assert.equal(result.saved_objects[0].type, 'dashboard');
+    assert.equal(result.saved_objects[0].version, 'WzEsMV0=');
   } finally { await mock.close(); }
 });
 

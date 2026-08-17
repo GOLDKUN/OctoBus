@@ -33,6 +33,7 @@ export function createMockServer({ expectedUser = DEFAULT_USER, expectedPassword
     const entry = {
       method: req.method, path,
       query: Object.fromEntries(fullUrl.searchParams),
+      queryAll: Object.fromEntries([...new Set(fullUrl.searchParams.keys())].map((key) => [key, fullUrl.searchParams.getAll(key)])),
       headers: req.headers,
       body: parseJsonBody(rawBody),
     };
@@ -66,7 +67,7 @@ export function createMockServer({ expectedUser = DEFAULT_USER, expectedPassword
     }
 
     if (req.method === 'GET' && routePath === '/api/saved_objects/_find') {
-      sendJson(res, 200, { total: 2, page: 1, per_page: 20, saved_objects: [{ id: 'obj-1', type: 'index-pattern', updated_at: '2026-01-01T00:00:00.000Z', version: 1, references: [] }, { id: 'obj-2', type: 'dashboard', updated_at: '2026-01-02T00:00:00.000Z', version: 2, references: [{ name: 'ref1', type: 'index-pattern', id: 'obj-1' }] }] });
+      sendJson(res, 200, { total: 2, page: 1, per_page: 20, saved_objects: [{ id: 'obj-1', type: 'index-pattern', updated_at: '2026-01-01T00:00:00.000Z', version: 'WzEsMV0=', references: [] }, { id: 'obj-2', type: 'dashboard', updated_at: '2026-01-02T00:00:00.000Z', version: 'WzIsMV0=', references: [{ name: 'ref1', type: 'index-pattern', id: 'obj-1' }] }] });
       return;
     }
 
@@ -74,7 +75,7 @@ export function createMockServer({ expectedUser = DEFAULT_USER, expectedPassword
       const parsed = entry.body;
       if (!Array.isArray(parsed)) { sendJson(res, 400, { statusCode: 400, error: 'Bad Request' }); return; }
       const items = parsed;
-      const results = items.map((item) => ({ id: item?.id || 'unknown', type: item?.type || 'unknown', version: 1, updated_at: '2026-01-01T00:00:00.000Z', attributes: { title: 'Test' }, references: [], migrationVersion: {}, coreMigrationVersion: '7.10.0' }));
+      const results = items.map((item) => ({ id: item?.id || 'unknown', type: item?.type || 'unknown', version: 'WzEsMV0=', updated_at: '2026-01-01T00:00:00.000Z', attributes: { title: 'Test' }, references: [], migrationVersion: {}, coreMigrationVersion: '7.10.0' }));
       sendJson(res, 200, { saved_objects: results });
       return;
     }
@@ -83,7 +84,7 @@ export function createMockServer({ expectedUser = DEFAULT_USER, expectedPassword
       const parts = routePath.split('/');
       const type = decodeURIComponent(parts[3]);
       const id = decodeURIComponent(parts[4]);
-      sendJson(res, 200, { id, type, version: 1, updated_at: '2026-01-01T00:00:00.000Z', attributes: { title: 'Test Object', description: 'Mock' }, references: [], migrationVersion: { dashboard: '7.10.0' }, coreMigrationVersion: '7.10.0' });
+      sendJson(res, 200, { id, type, version: 'WzEsMV0=', updated_at: '2026-01-01T00:00:00.000Z', attributes: { title: 'Test Object', description: 'Mock' }, references: [], migrationVersion: { dashboard: '7.10.0' }, coreMigrationVersion: '7.10.0' });
       return;
     }
 
