@@ -282,6 +282,14 @@ test('allows an empty-state row that is not shaped like an event', async () => {
   assert.deepEqual(out.entries, []);
 });
 
+test('rejects drifted event rows when time moves or an event class remains', async () => {
+  const ctx = buildCtx({ host: 'https://ids', cookie: 'secret-cookie' });
+  withFetch(async () => fakeResponse(200, '<table id="mytable"><tr class="event-row"><td>低</td><td>event</td><td>2026-01-02 03:04:05</td><td>192.0.2.1:1</td><td>192.0.2.2:2</td></tr></table>'));
+  await assert.rejects(() => callHandler(ctx), (e) => e.legacyCode === 'FAILED_PRECONDITION');
+  withFetch(async () => fakeResponse(200, '<table id="mytable"><tr class="even"><td>unexpected layout</td></tr></table>'));
+  await assert.rejects(() => callHandler(ctx), (e) => e.legacyCode === 'FAILED_PRECONDITION');
+});
+
 test('maps HTTP status before reading an oversized error page', async () => {
   withFetch(async () => ({
     ...fakeResponse(403, '', false),
