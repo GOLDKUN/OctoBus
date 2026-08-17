@@ -133,7 +133,11 @@ const splitIpPort = (cell) => {
 const hasEventTable = (html) => /<table\b[^>]*\bid\s*=\s*(["'])mytable\1[^>]*>/i.test(String(html));
 const hasEventDataRows = (html) => {
   const table = (String(html).match(/<table\b[^>]*\bid\s*=\s*(["'])mytable\1[^>]*>([\s\S]*?)<\/table>/i) ?? [])[2] ?? '';
-  return /<tr\b[^>]*>[\s\S]*?<td\b/i.test(table);
+  for (const row of table.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const cells = [...row[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((cell) => cell[1]);
+    if (cells.length >= 5 && DATETIME_RE.test(stripTags(cells[1]))) return true;
+  }
+  return false;
 };
 const parseEventList = (html, limit = 0) => {
   const entries = [];
