@@ -2,9 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": true,
-  "allOf": [
-    { "anyOf": [{ "required": ["project_name"] }, { "required": ["projectName"] }] }
-  ],
+  "required": ["project_name"],
   "anyOf": [
     { "required": ["auth_url"] },
     { "required": ["authUrl"] },
@@ -30,10 +28,6 @@
     "project_name": {
       "type": "string",
       "description": "Default Keystone project name to scope tokens against."
-    },
-    "projectName": {
-      "type": "string",
-      "description": "Alias for project_name."
     },
     "project_domain_name": {
       "type": "string",
