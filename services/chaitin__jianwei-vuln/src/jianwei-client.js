@@ -18,6 +18,9 @@ const DEFAULT_RETRY_OPTIONS = {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const IDEMPOTENT_METHODS = new Set(["AssetMgrService.IpAssetList", "AssetMgrService.IpAssetGet", "ScanVulnIpService.SearchScanVulnIpList", "ScanVulnIpService.SearchScanVulnWebList", "ScanVulnIpService.SearchScanVulnIpDetail", "IntelligenceService.GetIPIntelligenceList", "IntelligenceService.GetIPIntelligenceDetail", "IntelligenceService.GetDomainIntelligenceList", "IntelligenceService.GetDomainIntelligenceDetail", "KBService.SearchStandardVulnList", "KBService.GetStandardVulnDetailByCTID", "KBService.GetStandardVulnDetailByID", "KBService.SearchCustomizeTags", "ScanDeviceService.CheckScanDeviceAuth", "ScanDeviceService.GetDataAccessMapping", "ScanDeviceService.GetDeviceProductNameList", "ScanVulnIpService.GetVulnVptScore", "ScanVulnIpService.GetVulnVptScoreSetting", "ScanVulnIpService.GetVulnVptScoreState"]);
+export function isIdempotentMethod(method) {
+    return IDEMPOTENT_METHODS.has(method);
+}
 
 let insecureAgent;
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { JianweiClient, _test as clientTest } from "../src/jianwei-client.js";
+import { JianweiClient, _test as clientTest, isIdempotentMethod } from "../src/jianwei-client.js";
 import { handlers } from "../src/jianwei-vuln.js";
 
 const originalFetch = globalThis.fetch;
@@ -108,6 +108,18 @@ test("handlers reject malformed or precision-losing integer fields", async () =>
     await assert.rejects(invoke("AssetService/ListAssets", { count: "0", offset: "0" }), (error) => error.legacyCode === "INVALID_ARGUMENT");
     await assert.rejects(invoke("AssetService/ListAssets", { count: "10", offset: "-1" }), (error) => error.legacyCode === "INVALID_ARGUMENT");
     await assert.rejects(invoke("VulnerabilityService/UpdateVulnerabilityStatus", { vuln_ids: ["1", "bad"] }), (error) => error.legacyCode === "INVALID_ARGUMENT");
+});
+
+test("offset-only pagination is explicit and retry classification covers all RPCs", async () => {
+    const requests = installMock({ total: 0, data: [] });
+    await handlers[`${prefix}.AssetService/ListAssets`](context({ offset: "10" }));
+    assert.deepEqual(requests[0].body.params, { page_size: 10, page: 2 });
+    const methods = cases.map(([, method]) => method);
+    const readMethods = methods.filter((method) => isIdempotentMethod(method));
+    const writeMethods = methods.filter((method) => !isIdempotentMethod(method));
+    assert.ok(readMethods.length >= 15);
+    assert.ok(writeMethods.length >= 10);
+    assert.equal(new Set([...readMethods, ...writeMethods]).size, 30);
 });
 
 test("client uses secure defaults, bounded requests, and typed errors", async (t) => {
