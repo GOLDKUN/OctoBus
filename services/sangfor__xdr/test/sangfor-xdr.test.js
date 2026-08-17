@@ -243,7 +243,7 @@ describe("complete handler and client coverage", () => {
       }
       upstreamPayload = {};
       for (const [name, handler] of Object.entries(service.handlers)) {
-        const result = await handler({}, makeCtx());
+        const result = await handler(request, makeCtx());
         assert.ok(result && typeof result === "object", `${name} must handle an empty response`);
       }
       const alternate = {
@@ -311,6 +311,17 @@ describe("complete handler and client coverage", () => {
 
       globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => { throw new Error("read failed"); } });
       await assert.rejects(signedRequest({ config: { endpoint: "https://xdr.example" }, secret: { ak: "ak", sk: "sk" }, method: "GET", path: "/api" }), /UNAVAILABLE/);
+
+      globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => "not-json" });
+      await assert.rejects(signedRequest({ config: { endpoint: "https://xdr.example" }, secret: { ak: "ak", sk: "sk" }, method: "GET", path: "/api" }), /non-JSON/);
+
+      globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => '{"code":4001,"msg":"invalid request"}' });
+      await assert.rejects(signedRequest({ config: { endpoint: "https://xdr.example" }, secret: { ak: "ak", sk: "sk" }, method: "GET", path: "/api" }), /4001/);
+
+      await assert.rejects(
+        service.handlers["sangfor_xdr.AssetService/GetAsset"]({}, makeCtx()),
+        /assetId is required/,
+      );
 
       let captured;
       globalThis.fetch = async (url, init) => {

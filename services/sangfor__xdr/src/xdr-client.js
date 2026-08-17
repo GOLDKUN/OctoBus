@@ -163,6 +163,12 @@ export async function signedRequest({ config, secret, method, path, body }) {
   try {
     data = JSON.parse(text);
   } catch {
+    if (res.ok) {
+      throw upstreamError("UNAVAILABLE", "XDR upstream returned a non-JSON response", {
+        httpStatus: res.status,
+        reason: "response body is not valid JSON",
+      });
+    }
     data = { _raw: text };
   }
 
@@ -171,6 +177,13 @@ export async function signedRequest({ config, secret, method, path, body }) {
       httpStatus: res.status,
       rawBody: text,
       reason: JSON.stringify(data),
+    });
+  }
+
+  if (typeof data?.code === "number" && data.code !== 0) {
+    throw upstreamError("INVALID_ARGUMENT", `XDR business error: ${data.code}`, {
+      httpStatus: res.status,
+      reason: String(data.msg ?? data.message ?? "business request failed"),
     });
   }
 

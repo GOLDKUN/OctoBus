@@ -68,7 +68,7 @@ message AssetAttribute { string asset_id = 1 [json_name = "assetId"]; map<string
 message ListAssetsV1Request { int32 page = 1; int32 page_size = 2 [json_name = "pageSize"]; string keyword = 3; string branch_id = 4 [json_name = "branchId"]; string group_type = 5 [json_name = "groupType"]; }
 message ListAssetsV1Response { int32 total = 1; int32 page = 2; int32 page_size = 3 [json_name = "pageSize"]; repeated AssetV1 items = 4; }
 message GetAssetV1Request { string aid = 1; }
-message AssetV1 { int32 id = 1; string name = 2; string ip = 3; string hostname = 4; string os = 5; string group_name = 6 [json_name = "groupName"]; string branch_name = 7 [json_name = "branchName"]; string responsible_person = 8 [json_name = "responsiblePerson"]; string department = 9; }
+message AssetV1 { string id = 1; string name = 2; string ip = 3; string hostname = 4; string os = 5; string group_name = 6 [json_name = "groupName"]; string branch_name = 7 [json_name = "branchName"]; string responsible_person = 8 [json_name = "responsiblePerson"]; string department = 9; }
 message GetAssetByOriginRequest { string origin_device_id = 1 [json_name = "originDeviceId"]; string product_name = 2 [json_name = "productName"]; string ip = 3; }
 message ListAssetsSaaSRequest { int32 page = 1; int32 page_size = 2 [json_name = "pageSize"]; string keyword = 3; }
 

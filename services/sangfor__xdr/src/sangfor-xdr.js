@@ -1,30 +1,45 @@
 // ============ AssetService ============
 
+function requiredString(req, key) {
+  const value = req?.[key];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new GrpcError(grpcStatus.INVALID_ARGUMENT, `${key} is required`);
+  }
+  return value;
+}
+
+function encodedRequired(req, key) {
+  return encodeURIComponent(requiredString(req, key));
+}
+
 const assetHandlers = {
   "sangfor_xdr.AssetService/ListAssets": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/apps/asset/api/v2/asset/assets?_method=GET&page=${req.page || 1}&pageSize=${req.pageSize || 20}${
-      req.keyword ? `&keyword=${encodeURIComponent(req.keyword)}` : ""
-    }${req.branchIds?.length ? `&branchIds=${req.branchIds.join(",")}` : ""}${req.groupIds?.length ? `&groupIds=${req.groupIds.join(",")}` : ""}${req.ipList?.length ? `&ipList=${req.ipList.join(",")}` : ""}` });
+    const params = new URLSearchParams({ _method: "GET", page: String(req.page || 1), pageSize: String(req.pageSize || 20) });
+    if (req.keyword) params.set("keyword", req.keyword);
+    if (req.branchIds?.length) params.set("branchIds", req.branchIds.join(","));
+    if (req.groupIds?.length) params.set("groupIds", req.groupIds.join(","));
+    if (req.ipList?.length) params.set("ipList", req.ipList.join(","));
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/apps/asset/api/v2/asset/assets?${params}` });
     return { total: r.data?.total ?? 0, page: req.page || 1, pageSize: req.pageSize || 20, items: (r.data?.items ?? r.data?.list ?? []).map(mapAsset) };
   },
 
   "sangfor_xdr.AssetService/GetAsset": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/apps/asset/api/v2/asset/assets/${encodeURIComponent(req.assetId)}?_method=GET` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/apps/asset/api/v2/asset/assets/${encodedRequired(req, "assetId")}?_method=GET` });
     return mapAsset(r.data);
   },
 
   "sangfor_xdr.AssetService/UpdateAsset": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "POST", path: `/apps/asset/api/v2/asset/assets/${encodeURIComponent(req.assetId)}?_method=PATCH`, body: { name: req.name, description: req.description, groupId: req.groupId, responsiblePerson: req.responsiblePerson } });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "POST", path: `/apps/asset/api/v2/asset/assets/${encodedRequired(req, "assetId")}?_method=PATCH`, body: { name: req.name, description: req.description, groupId: req.groupId, responsiblePerson: req.responsiblePerson } });
     return { success: r.data?.success ?? r.data?.code === 0, message: r.data?.message ?? r.data?.msg ?? "" };
   },
 
   "sangfor_xdr.AssetService/ListBranches": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/apps/asset/api/v2/asset/branch/get_branch${req.groupId ? `?groupId=${req.groupId}` : ""}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/apps/asset/api/v2/asset/branch/get_branch${req.groupId ? `?groupId=${encodeURIComponent(req.groupId)}` : ""}` });
     return { total: r.data?.total ?? 0, items: (r.data?.items ?? []).map(b => ({ id: b.id ?? b.branchId ?? "", name: b.name ?? b.branchName ?? "", assetCount: b.assetCount ?? b.count ?? 0 })) };
   },
 
   "sangfor_xdr.AssetService/ListGroups": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/apps/asset/api/v2/asset/group/get_group${req.groupType ? `?groupType=${req.groupType}` : ""}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/apps/asset/api/v2/asset/group/get_group${req.groupType ? `?groupType=${encodeURIComponent(req.groupType)}` : ""}` });
     return { total: r.data?.total ?? 0, items: (r.data?.items ?? []).map(g => ({ id: g.id ?? g.groupId ?? "", name: g.name ?? g.groupName ?? "", type: g.type ?? g.groupType ?? "", assetCount: g.assetCount ?? g.count ?? 0 })) };
   },
 
@@ -39,7 +54,7 @@ const assetHandlers = {
   },
 
   "sangfor_xdr.AssetService/GetExposure": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/apps/asset/api/v2/asset/get_exposure?assetId=${encodeURIComponent(req.assetId)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/apps/asset/api/v2/asset/get_exposure?assetId=${encodedRequired(req, "assetId")}` });
     return { openPorts: r.data?.openPorts ?? [], openServices: r.data?.openServices ?? [], vulnerabilities: r.data?.vulnerabilities ?? [] };
   },
 
@@ -82,7 +97,7 @@ const assetHandlers = {
   },
 
   "sangfor_xdr.AssetService/GetAssetAttributes": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/apps/asset/api/v2/asset/get_asset_attributes?assetIds=${(req.assetIds ?? []).join(",")}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/apps/asset/api/v2/asset/get_asset_attributes?assetIds=${encodeURIComponent((req.assetIds ?? []).join(","))}` });
     return { items: (r.data?.items ?? []).map(a => ({ assetId: a.assetId ?? a.id ?? "", attributes: a.attributes ?? a.attrs ?? {} })) };
   },
 
@@ -96,7 +111,7 @@ const assetHandlers = {
   },
 
   "sangfor_xdr.AssetService/GetAssetV1": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/apps/asset/api/assets/${encodeURIComponent(req.aid)}?_method=GET` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/apps/asset/api/assets/${encodedRequired(req, "aid")}?_method=GET` });
     return mapAssetV1(r.data);
   },
 
@@ -117,7 +132,7 @@ const assetHandlers = {
   },
 
   "sangfor_xdr.AssetService/GetAssetSaaS": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v2/asset/assets/${encodeURIComponent(req.assetId)}?_method=GET` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v2/asset/assets/${encodedRequired(req, "assetId")}?_method=GET` });
     return mapAsset(r.data);
   },
 };
@@ -149,38 +164,38 @@ const incidentHandlers = {
   },
 
   "sangfor_xdr.IncidentService/GetAnalysisField": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/analysis/analysisField/${encodeURIComponent(req.uuid)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/analysis/analysisField/${encodedRequired(req, "uuid")}` });
     return { fields: (r.data?.fields ?? r.data?.items ?? []).map(f => ({ fieldName: f.fieldName ?? f.key ?? "", fieldValue: f.fieldValue ?? f.value ?? "", fieldType: f.fieldType ?? f.type ?? "" })) };
   },
 
   "sangfor_xdr.IncidentService/GetLogDetail": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/analysis/analysisDetail?uuid=${encodeURIComponent(req.uuid || "")}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/analysis/analysisDetail?uuid=${encodedRequired(req, "uuid")}` });
     return { id: r.data?.id ?? "", logType: r.data?.logType ?? "", timestamp: r.data?.timestamp ?? "", source: r.data?.source ?? "", rawData: r.data?.rawData ?? "", fields: r.data?.fields ?? {} };
   },
 
   "sangfor_xdr.IncidentService/GetESideLogDetail": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/analysis/eSide/analysisDetail?uuid=${encodeURIComponent(req.uuid || "")}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/analysis/eSide/analysisDetail?uuid=${encodedRequired(req, "uuid")}` });
     return { id: r.data?.id ?? "", logType: r.data?.logType ?? "", timestamp: r.data?.timestamp ?? "", source: r.data?.source ?? "", rawData: r.data?.rawData ?? "", fields: r.data?.fields ?? {} };
   },
 
   "sangfor_xdr.IncidentService/GetAlertLogs": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/analysis/getAnalysisListByAlertId?alertId=${encodeURIComponent(req.alertId)}&page=${req.page || 1}&pageSize=${req.pageSize || 20}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/analysis/getAnalysisListByAlertId?alertId=${encodedRequired(req, "alertId")}&page=${req.page || 1}&pageSize=${req.pageSize || 20}` });
     return { total: r.data?.total ?? 0, items: (r.data?.items ?? []).map(l => ({ id: l.id ?? "", logType: l.logType ?? "", timestamp: l.timestamp ?? "", source: l.source ?? "", rawData: l.rawData ?? "", fields: l.fields ?? {} })) };
   },
 
   "sangfor_xdr.IncidentService/GetDisposalStats": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/${encodeURIComponent(req.uuid)}/disposalStatistics` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/${encodedRequired(req, "uuid")}/disposalStatistics` });
     return { totalEntities: r.data?.totalEntities ?? 0, disposed: r.data?.disposed ?? 0, pending: r.data?.pending ?? 0, entities: (r.data?.entities ?? []).map(e => ({ entityType: e.entityType ?? e.type ?? "", entityName: e.entityName ?? e.name ?? "", status: e.status ?? "" })) };
   },
 
   "sangfor_xdr.IncidentService/GetDisposalTabs": async (req, ctx) => {
     const extra = req.entityType ? `?entityType=${encodeURIComponent(req.entityType)}` : "";
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/${encodeURIComponent(req.uuid)}/disposalTabs${extra}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/${encodedRequired(req, "uuid")}/disposalTabs${extra}` });
     return { tabs: (r.data?.tabs ?? []).map(t => ({ tabName: t.tabName ?? t.name ?? "", tabType: t.tabType ?? t.type ?? "", entities: (t.entities ?? []).map(e => ({ entityType: e.entityType ?? e.type ?? "", entityName: e.entityName ?? e.name ?? "", status: e.status ?? "" })) })) };
   },
 
   "sangfor_xdr.IncidentService/GetDisposalAdvices": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/${encodeURIComponent(req.uuid)}/disposalAdvices` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/${encodedRequired(req, "uuid")}/disposalAdvices` });
     return { summary: r.data?.summary ?? "", advices: (r.data?.advices ?? []).map(a => ({ action: a.action ?? "", target: a.target ?? "", description: a.description ?? "", severity: a.severity ?? "" })) };
   },
 
@@ -226,12 +241,12 @@ const responseHandlers = {
   },
 
   "sangfor_xdr.ResponseService/GetTaskResult": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/linkage/action/${encodeURIComponent(req.taskId)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/linkage/action/${encodedRequired(req, "taskId")}` });
     return { taskId: r.data?.taskId ?? req.taskId, status: r.data?.status ?? "", result: r.data?.result ?? r.data?.data ?? "", createTime: r.data?.createTime ?? "", finishTime: r.data?.finishTime ?? "" };
   },
 
   "sangfor_xdr.ResponseService/GetDisposeFileStatus": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/linkage/disposefile/status?fileHashes=${(req.fileHashes ?? []).join(",")}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/linkage/disposefile/status?fileHashes=${encodeURIComponent((req.fileHashes ?? []).join(","))}` });
     return { items: (r.data?.items ?? []).map(i => ({ fileHash: i.fileHash ?? "", status: i.status ?? "", message: i.message ?? "" })) };
   },
 
@@ -251,17 +266,17 @@ const responseHandlers = {
   },
 
   "sangfor_xdr.ResponseService/OneClickDisposeTask": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "POST", path: `/api/xdr/v1/incidents/${encodeURIComponent(req.uuid)}/oneclickdispose/task`, body: { entityIds: req.entityIds, action: req.action } });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "POST", path: `/api/xdr/v1/incidents/${encodedRequired(req, "uuid")}/oneclickdispose/task`, body: { entityIds: req.entityIds, action: req.action } });
     return { success: r.data?.success ?? r.data?.code === 0, message: r.data?.message ?? r.data?.msg ?? "", taskId: r.data?.taskId ?? "" };
   },
 
   "sangfor_xdr.ResponseService/GetDisposeEntities": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incidents/${encodeURIComponent(req.uuid)}/oneclickdispose/entities` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incidents/${encodedRequired(req, "uuid")}/oneclickdispose/entities` });
     return { entities: (r.data?.entities ?? []).map(e => ({ entityId: e.entityId ?? e.id ?? "", entityType: e.entityType ?? e.type ?? "", entityName: e.entityName ?? e.name ?? "", status: e.status ?? "", availableActions: e.availableActions ?? e.actions ?? [] })) };
   },
 
   "sangfor_xdr.ResponseService/GetLinkageDevices": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incidents/${encodeURIComponent(req.uuid)}/incidentLinkageDevice` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incidents/${encodedRequired(req, "uuid")}/incidentLinkageDevice` });
     return { devices: (r.data?.devices ?? []).map(d => ({ deviceId: d.deviceId ?? d.id ?? "", deviceName: d.deviceName ?? d.name ?? "", deviceType: d.deviceType ?? d.type ?? "", status: d.status ?? "" })) };
   },
 
@@ -271,7 +286,7 @@ const responseHandlers = {
   },
 
   "sangfor_xdr.ResponseService/PollTask": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/pollTask?taskId=${encodeURIComponent(req.taskId)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/pollTask?taskId=${encodedRequired(req, "taskId")}` });
     return { taskId: r.data?.taskId ?? req.taskId, status: r.data?.status ?? "", result: r.data?.result ?? r.data?.data ?? "", createTime: r.data?.createTime ?? "", finishTime: r.data?.finishTime ?? "" };
   },
 
@@ -293,17 +308,17 @@ const vulnHandlers = {
   },
 
   "sangfor_xdr.VulnerabilityService/GetWeakPasswordProof": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/asm/risk/detail/proof?riskId=${encodeURIComponent(req.riskId)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/asm/risk/detail/proof?riskId=${encodedRequired(req, "riskId")}` });
     return { riskId: r.data?.riskId ?? req.riskId, proofs: (r.data?.proofs ?? []).map(p => ({ key: p.key ?? "", value: p.value ?? "" })) };
   },
 
   "sangfor_xdr.VulnerabilityService/GetWeakPasswordCommon": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/asm/risk/detail/common?riskId=${encodeURIComponent(req.riskId)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/asm/risk/detail/common?riskId=${encodedRequired(req, "riskId")}` });
     return { riskId: r.data?.riskId ?? req.riskId, protocol: r.data?.protocol ?? "", port: r.data?.port ?? "", service: r.data?.service ?? "", description: r.data?.description ?? "" };
   },
 
   "sangfor_xdr.VulnerabilityService/GetWeakPasswordBase": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/asm/risk/detail/base?riskId=${encodeURIComponent(req.riskId)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/asm/risk/detail/base?riskId=${encodedRequired(req, "riskId")}` });
     return { riskId: r.data?.riskId ?? req.riskId, vulnName: r.data?.vulnName ?? "", cveId: r.data?.cveId ?? "", severity: r.data?.severity ?? "", status: r.data?.status ?? "", detectTime: r.data?.detectTime ?? "", fixTime: r.data?.fixTime ?? "" };
   },
 
@@ -318,17 +333,17 @@ const vulnHandlers = {
   },
 
   "sangfor_xdr.VulnerabilityService/GetVulnProof": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/order/v1/openapi/risk/detail/proof?riskId=${encodeURIComponent(req.riskId)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/order/v1/openapi/risk/detail/proof?riskId=${encodedRequired(req, "riskId")}` });
     return { riskId: r.data?.riskId ?? req.riskId, proofs: (r.data?.proofs ?? []).map(p => ({ key: p.key ?? "", value: p.value ?? "" })) };
   },
 
   "sangfor_xdr.VulnerabilityService/GetVulnCommon": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/order/v1/openapi/risk/detail/common?riskId=${encodeURIComponent(req.riskId)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/order/v1/openapi/risk/detail/common?riskId=${encodedRequired(req, "riskId")}` });
     return { riskId: r.data?.riskId ?? req.riskId, protocol: r.data?.protocol ?? "", port: r.data?.port ?? "", description: r.data?.description ?? "" };
   },
 
   "sangfor_xdr.VulnerabilityService/GetVulnBase": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/order/v1/openapi/risk/detail/base?riskId=${encodeURIComponent(req.riskId)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/order/v1/openapi/risk/detail/base?riskId=${encodedRequired(req, "riskId")}` });
     return { riskId: r.data?.riskId ?? req.riskId, vulnName: r.data?.vulnName ?? "", cveId: r.data?.cveId ?? "", severity: r.data?.severity ?? "", status: r.data?.status ?? "" };
   },
 
@@ -345,12 +360,12 @@ const vulnHandlers = {
   },
 
   "sangfor_xdr.VulnerabilityService/ListAssetVulns": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/order/v1/outer/risky_assets/loopholes?assetId=${encodeURIComponent(req.assetId)}&page=${req.page || 1}&pageSize=${req.pageSize || 20}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/order/v1/outer/risky_assets/loopholes?assetId=${encodedRequired(req, "assetId")}&page=${req.page || 1}&pageSize=${req.pageSize || 20}` });
     return { total: r.data?.total ?? 0, items: (r.data?.items ?? []).map(mapVuln) };
   },
 
   "sangfor_xdr.VulnerabilityService/GetVulnsByPerson": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/order/v1/openapi/risk/risk_by_person?personId=${encodeURIComponent(req.personId)}&page=${req.page || 1}&pageSize=${req.pageSize || 20}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/order/v1/openapi/risk/risk_by_person?personId=${encodedRequired(req, "personId")}&page=${req.page || 1}&pageSize=${req.pageSize || 20}` });
     return { total: r.data?.total ?? 0, items: (r.data?.items ?? []).map(mapVuln) };
   },
 
@@ -379,7 +394,7 @@ const soarHandlers = {
   },
 
   "sangfor_xdr.SoarService/GetDetail": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/customized/soar/detail?detailType=${encodeURIComponent(req.detailType || "asset")}&id=${encodeURIComponent(req.id)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/customized/soar/detail?detailType=${encodeURIComponent(req.detailType || "asset")}&id=${encodedRequired(req, "id")}` });
     return { detailType: r.data?.detailType ?? req.detailType ?? "", id: r.data?.id ?? req.id, rawData: r.data?.rawData ?? r.data?.data ?? JSON.stringify(r.data) };
   },
 };
@@ -417,38 +432,38 @@ const authHandlers = {
   },
 
   "sangfor_xdr.AuthService/GetClient": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/oauth2/client/${encodeURIComponent(req.clientId)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/oauth2/client/${encodedRequired(req, "clientId")}` });
     return mapClient(r.data);
   },
 
   "sangfor_xdr.AuthService/GetClientByName": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/oauth2/client?name=${encodeURIComponent(req.name)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/oauth2/client?name=${encodedRequired(req, "name")}` });
     return mapClient(r.data);
   },
 
   "sangfor_xdr.AuthService/UpdateClient": async (req, ctx) => {
     const { clientId, ...rest } = req || {};
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "POST", path: `/api/xdr/v1/oauth2/client/${encodeURIComponent(clientId)}`, body: rest });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "POST", path: `/api/xdr/v1/oauth2/client/${encodedRequired({ clientId }, "clientId")}`, body: rest });
     return mapClient(r.data);
   },
 
   "sangfor_xdr.AuthService/DeleteClient": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "DELETE", path: `/api/xdr/v1/oauth2/client/${encodeURIComponent(req.clientId)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "DELETE", path: `/api/xdr/v1/oauth2/client/${encodedRequired(req, "clientId")}` });
     return { success: r.data?.success ?? r.data?.code === 0, message: r.data?.message ?? r.data?.msg ?? "" };
   },
 
   "sangfor_xdr.AuthService/GenerateSecret": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "POST", path: `/api/xdr/v1/oauth2/client/secret/${encodeURIComponent(req.clientId)}`, body: {} });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "POST", path: `/api/xdr/v1/oauth2/client/secret/${encodedRequired(req, "clientId")}`, body: {} });
     return { clientId: r.data?.clientId ?? req.clientId, clientSecret: r.data?.clientSecret ?? r.data?.secret ?? "", createTime: r.data?.createTime ?? "" };
   },
 
   "sangfor_xdr.AuthService/GetSecret": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/oauth2/client/secret/${encodeURIComponent(req.clientId)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/oauth2/client/secret/${encodedRequired(req, "clientId")}` });
     return { clientId: r.data?.clientId ?? req.clientId, secretHint: r.data?.secretHint ?? r.data?.hint ?? "", createTime: r.data?.createTime ?? "", expireTime: r.data?.expireTime ?? "" };
   },
 
   "sangfor_xdr.AuthService/DeleteSecret": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "DELETE", path: `/api/xdr/v1/oauth2/client/secret/${encodeURIComponent(req.clientId)}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "DELETE", path: `/api/xdr/v1/oauth2/client/secret/${encodedRequired(req, "clientId")}` });
     return { success: r.data?.success ?? r.data?.code === 0, message: r.data?.message ?? r.data?.msg ?? "" };
   },
 };
@@ -482,7 +497,7 @@ const expertHandlers = {
   },
 
   "sangfor_xdr.ThreatExpertService/UpdateDisposeIcon": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "POST", path: `/api/xdr/v1/incidents/${encodeURIComponent(req.uuid)}/oneclickdispose/iconChange`, body: { iconStatus: req.iconStatus } });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "POST", path: `/api/xdr/v1/incidents/${encodedRequired(req, "uuid")}/oneclickdispose/iconChange`, body: { iconStatus: req.iconStatus } });
     return { success: r.data?.success ?? r.data?.code === 0, message: r.data?.message ?? r.data?.msg ?? "", taskId: r.data?.taskId ?? "" };
   },
 };
@@ -587,6 +602,7 @@ function mapClient(raw) {
 
 // ============ Export ============
 
+import { GrpcError, grpcStatus } from "@chaitin-ai/octobus-sdk";
 import { signedRequest } from "./xdr-client.js";
 
 export const handlers = {
