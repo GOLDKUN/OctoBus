@@ -28,9 +28,7 @@ Configuration:
 - `auth_url` (or `authUrl`, `identityEndpoint`): Keystone v3 base URL, for example
   `https://identity.example.com:5000` or `http://controller:5000`.
 - `region`: OpenStack region used to select a public service-catalog endpoint.
-- `project_name`: required canonical Keystone project name used to scope the
-  token. `projectName` is retained only for compatibility with legacy callers
-  that also provide the canonical field.
+- `project_name`: required Keystone project name used to scope the token.
 - `project_domain_name` (or `projectDomainName`): Keystone project domain name
   (defaults to `Default` upstream if missing).
 - `user_domain_name` (or `userDomainName`): Keystone user domain name (defaults to

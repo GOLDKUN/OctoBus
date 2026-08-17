@@ -98,7 +98,7 @@ const resolveAuthUrl = (bindings = {}) => {
 };
 
 const resolveRegion = (bindings = {}) => toTrimmedString(firstDefined(bindings.region));
-const resolveProjectName = (bindings = {}) => toTrimmedString(firstDefined(bindings.project_name, bindings.projectName));
+const resolveProjectName = (bindings = {}) => toTrimmedString(bindings.project_name);
 const resolveProjectDomainName = (bindings = {}) => toTrimmedString(firstDefined(bindings.project_domain_name, bindings.projectDomainName));
 const resolveUserDomainName = (bindings = {}) => toTrimmedString(firstDefined(bindings.user_domain_name, bindings.userDomainName));
 const resolveUsername = (bindings = {}) => toTrimmedString(firstDefined(bindings.username));
