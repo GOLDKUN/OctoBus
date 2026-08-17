@@ -188,6 +188,16 @@ test('error mapping: missing host, network, non-json', async () => {
   await assert.rejects(mod.handlers[SET]({ policies: [{ name: 'x' }] }, c), /UNKNOWN.*not valid JSON/);
 });
 
+test('request host cannot override the configured device host', async () => {
+  const mod = await loadMod();
+  mod._test.sessionCache.clear();
+  setFetch(() => loginOk);
+
+  await mod.handlers[LOGIN]({ host: 'https://attacker.example:443' }, ctx());
+
+  assert.equal(lastReq.url, `${HOST}/v1.0/login`);
+});
+
 test('infrastructure helpers cover edge branches', async () => {
   const { _test } = await loadMod();
 

@@ -121,9 +121,8 @@ const normalizeBaseUrl = (value) => {
   return `${schemeMatch[1].toLowerCase()}://${authority}`;
 };
 
-const requireHost = (req, ctx) => {
+const requireHost = (_req, ctx) => {
   const candidates = [
-    req?.host,
     ctx?.bindings?.host,
     ctx?.bindings?.restBaseUrl,
     ctx?.bindings?.baseUrl,
