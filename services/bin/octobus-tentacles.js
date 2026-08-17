@@ -93,6 +93,10 @@ const services = {
     entryFile: "../ctyun__accessone/bin/ctyun-accessone.js",
     serviceModule: "../ctyun__accessone/src/service.js",
   },
+  "huayulab-ngaf": {
+    entryFile: "../huayulab__ngaf/bin/huayulab-ngaf.js",
+    serviceModule: "../huayulab__ngaf/src/service.js",
+  },
   "cloudwalker": {
     entryFile: "../chaitin__cloudwalker/bin/cloudwalker.js",
     serviceModule: "../chaitin__cloudwalker/src/service.js",
