@@ -152,6 +152,22 @@ test('fetch errors are redacted', async () => {
   await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'UNAVAILABLE' && !e.message.includes('secret'));
 });
 
+test('timeout uses AbortSignal and insecure TLS uses an undici dispatcher', async () => {
+  const ctx = buildCtx(
+    { host: 'https://ips', cookie: 'c=1' },
+    { bindings: { skipTlsVerify: true }, limits: { timeoutMs: 5 } },
+  );
+  withFetch(async (_url, options) => {
+    assert.ok(options.signal instanceof AbortSignal);
+    assert.ok(options.dispatcher);
+    assert.equal('timeoutMs' in options, false);
+    assert.equal('skipTlsVerify' in options, false);
+    await new Promise((resolve) => options.signal.addEventListener('abort', resolve, { once: true }));
+    throw new DOMException('aborted', 'AbortError');
+  });
+  await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'UNAVAILABLE');
+});
+
 test('valid log page with zero data rows returns empty entries', async () => {
   const ctx = buildCtx({ host: 'https://ips', cookie: 'c=1' });
   withFetch(async () => fakeResponse(200, '<html><input name="module" value="ips_log_filter"><table><tr><th>名称</th></tr></table></html>'));
@@ -235,7 +251,7 @@ test('helper coverage', () => {
   assert.equal(h.unwrapScalar({ value: { value: 2 } }), 2);
   assert.deepEqual(h.sanitizeHeaders({ A: 1, '': 2, Cookie: 'bad', 'X-B': 'bad\r\nx: y' }), { A: '1' });
   assert.deepEqual(h.sanitizeHeaders('x'), {});
-  assert.equal(h.buildTlsOptions({ skipTlsVerify: true }).skipTlsVerify, true);
+  assert.ok(h.buildTlsOptions({ skipTlsVerify: true }).dispatcher);
   assert.deepEqual(h.buildTlsOptions({}), {});
   assert.equal(h.resolveTimeoutMs({ limits: { timeoutMs: 0 } }), 5000);
   assert.equal(h.resolveTimeoutMs({ limits: { timeoutMs: 321 } }), 321);

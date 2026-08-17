@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { Agent } from 'undici';
 
 // 启明星辰 IPS 攻击日志查询适配。
 // 认证:web 会话 Cookie。GET /log/memorylog/ipslog.php 返回 HTML 日志页，解析表行为结构化条目。
@@ -27,6 +28,7 @@ const ENTRY_FIELDS = [
   'time', 'type', 'severity', 'priority', 'action', 'policy_id', 'count', 'content',
 ];
 const DATETIME_RE = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/;
+const insecureTlsDispatcher = new Agent({ connect: { rejectUnauthorized: false } });
 
 const grpcCodeFor = (code) => ({
   FAILED_PRECONDITION: grpcStatus.FAILED_PRECONDITION,
@@ -151,7 +153,22 @@ const resolveMaxResponseBytes = (ctx = {}) => {
 
 const buildTlsOptions = (bindings = {}) => {
   const enabled = pickFirstBoolean([bindings.skipTlsVerify, bindings.tlsInsecureSkipVerify, bindings.insecureSkipVerify]) || false;
-  return enabled ? { skipTlsVerify: true, tlsInsecureSkipVerify: true, insecureSkipVerify: true } : {};
+  return enabled ? { dispatcher: insecureTlsDispatcher } : {};
+};
+
+const buildRequestOptions = (bound) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), resolveTimeoutMs(bound));
+  return {
+    options: {
+      method: 'GET',
+      redirect: 'manual',
+      signal: controller.signal,
+      ...buildTlsOptions(bound.bindings),
+      headers: buildHeaders(bound.bindings, bound.meta, bound.cookie),
+    },
+    cleanup: () => clearTimeout(timer),
+  };
 };
 
 const sanitizeHeaders = (headers) => {
@@ -266,26 +283,27 @@ const runQueryIpsLog = async (req = {}, ctx = {}) => {
   if (rawLimit < 0 || rawLimit > MAX_LIMIT) throw errorWithCode('INVALID_ARGUMENT', `limit must be between 0 and ${MAX_LIMIT}`);
   const limit = rawLimit;
   let response;
+  const upstreamRequest = buildRequestOptions(bound);
   try {
-    response = await fetch(`${bound.host}${IPS_LOG_URI}`, {
-      method: 'GET',
-      redirect: 'manual',
-      timeoutMs: resolveTimeoutMs(bound),
-      ...buildTlsOptions(bound.bindings),
-      headers: buildHeaders(bound.bindings, bound.meta, bound.cookie),
-    });
+    response = await fetch(`${bound.host}${IPS_LOG_URI}`, upstreamRequest.options);
   } catch (err) {
+    upstreamRequest.cleanup();
     if (err instanceof GrpcError) throw err;
     throw errorWithCode('UNAVAILABLE', 'upstream request failed');
   }
   const status = Number(response.status);
-  if (!response.ok) throwForHttpStatus(status);
+  if (!response.ok) {
+    upstreamRequest.cleanup();
+    throwForHttpStatus(status);
+  }
   let text;
   try {
     text = await readBoundedText(response, resolveMaxResponseBytes(bound));
   } catch (err) {
     if (err instanceof GrpcError) throw err;
     throw errorWithCode('UNAVAILABLE', 'failed to read upstream response');
+  } finally {
+    upstreamRequest.cleanup();
   }
   // 会话失效时设备会重定向到登录页(同样 200),用日志页标记区分。
   if (!String(text || '').includes(LOG_PAGE_MARKER)) {
@@ -298,16 +316,13 @@ const runQueryIpsLog = async (req = {}, ctx = {}) => {
 const runProbeConnectivity = async (ctx = {}) => {
   const bound = requireBindings(ctx);
   let response;
+  const request = buildRequestOptions(bound);
   try {
-    response = await fetch(`${bound.host}${IPS_LOG_URI}`, {
-      method: 'GET',
-      redirect: 'manual',
-      timeoutMs: resolveTimeoutMs(bound),
-      ...buildTlsOptions(bound.bindings),
-      headers: buildHeaders(bound.bindings, bound.meta, bound.cookie),
-    });
+    response = await fetch(`${bound.host}${IPS_LOG_URI}`, request.options);
   } catch {
     throw errorWithCode('UNAVAILABLE', 'upstream request failed');
+  } finally {
+    request.cleanup();
   }
   const status = Number(response.status);
   if (!response.ok) throwForHttpStatus(status);
@@ -330,6 +345,7 @@ export const handlers = {
 
 export const _test = {
   buildHeaders,
+  buildRequestOptions,
   buildTlsOptions,
   decodeEntities,
   errorWithCode,
