@@ -155,6 +155,34 @@ test('BlockIP is idempotent: reuses existing rule, created_count=0', async () =>
   assert.equal(posted, false);
 });
 
+test('BlockIP scans result_info pagination before deciding to create', async () => {
+  const pages = [];
+  let posted = false;
+  setFetch((url, init) => {
+    if (init.method === 'GET') {
+      const page = Number(new URL(url).searchParams.get('page'));
+      pages.push(page);
+      if (page === 1) {
+        return cfOk(Array.from({ length: 50 }, (_, i) => rule(`other-${i}`, '6.6.6.6')), {
+          page: 1, per_page: 50, total_pages: 2, total_count: 51,
+        });
+      }
+      return cfOk([rule('existing-page-2', '5.5.5.5')], {
+        page: 2, per_page: 50, total_pages: 2, total_count: 51,
+      });
+    }
+    if (init.method === 'POST') posted = true;
+    return cfOk(null);
+  });
+
+  const handler = (await loadRpc({ targets: ['5.5.5.5'] }))[blockPath];
+  const out = await handler();
+  assert.deepEqual(pages, [1, 2]);
+  assert.equal(out.created_count, 0);
+  assert.equal(out.rules[0].id, 'existing-page-2');
+  assert.equal(posted, false);
+});
+
 test('BlockIP handles multiple targets and CIDR target inference', async () => {
   setFetch((url, init) => {
     if (init.method === 'GET') return cfOk([]);
@@ -169,6 +197,81 @@ test('BlockIP handles multiple targets and CIDR target inference', async () => {
   assert.equal(out.created_count, 2);
   assert.equal(out.rules[1].target, 'ip_range');
   assert.equal(out.rules[1].mode, 'challenge');
+});
+
+test('BlockIP deduplicates normalized targets within one request', async () => {
+  let gets = 0;
+  let posts = 0;
+  setFetch((url, init) => {
+    if (init.method === 'GET') {
+      gets += 1;
+      return cfOk([], { total_count: 0 });
+    }
+    if (init.method === 'POST') {
+      posts += 1;
+      const body = JSON.parse(init.body);
+      return cfOk(rule('once', body.configuration.value, body.mode));
+    }
+    return cfOk(null);
+  });
+
+  const handler = (await loadRpc({ targets: [' 1.2.3.4 ', '1.2.3.4'] }))[blockPath];
+  const out = await handler();
+  assert.equal(gets, 1);
+  assert.equal(posts, 1);
+  assert.equal(out.created_count, 1);
+  assert.equal(out.rules.length, 1);
+});
+
+test('BlockIP serializes concurrent creation for the same scope, mode, and target', async () => {
+  let storedRule;
+  let gets = 0;
+  let posts = 0;
+  setFetch(async (url, init) => {
+    if (init.method === 'GET') {
+      gets += 1;
+      return cfOk(storedRule ? [storedRule] : [], { total_count: storedRule ? 1 : 0 });
+    }
+    if (init.method === 'POST') {
+      posts += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      storedRule = rule('concurrent-once', '3.3.3.3');
+      return cfOk(storedRule);
+    }
+    return cfOk(null);
+  });
+
+  const first = (await loadRpc({ targets: ['3.3.3.3'] }))[blockPath];
+  const second = (await loadRpc({ targets: ['3.3.3.3'] }))[blockPath];
+  const [a, b] = await Promise.all([first(), second()]);
+  assert.equal(posts, 1);
+  assert.equal(gets, 2);
+  assert.equal(a.created_count + b.created_count, 1);
+  assert.equal(a.rules[0].id, 'concurrent-once');
+  assert.equal(b.rules[0].id, 'concurrent-once');
+});
+
+test('BlockIP reports completed creations when a later target fails', async () => {
+  let posts = 0;
+  setFetch((url, init) => {
+    if (init.method === 'GET') return cfOk([], { total_count: 0 });
+    if (init.method === 'POST') {
+      posts += 1;
+      if (posts === 2) return { status: 429, body: { success: false, errors: [] } };
+      const body = JSON.parse(init.body);
+      return cfOk(rule('created-first', body.configuration.value, body.mode));
+    }
+    return cfOk(null);
+  });
+
+  const handler = (await loadRpc({ targets: ['1.1.1.1', '2.2.2.2'] }))[blockPath];
+  await assert.rejects(handler(), (err) => {
+    assert.equal(err.legacyCode, 'RESOURCE_EXHAUSTED');
+    assert.deepEqual(err.partial_created_ids, ['created-first']);
+    assert.equal(err.partial_created_count, 1);
+    assert.match(err.message, /partial_created_ids=\["created-first"\]/);
+    return true;
+  });
 });
 
 test('BlockIP rejects missing targets and invalid mode', async () => {
@@ -213,6 +316,30 @@ test('UnblockIP mode filter narrows deletions', async () => {
   assert.deepEqual(out.deleted_ids, ['kill']);
 });
 
+test('UnblockIP deletes matches from every result_info page', async () => {
+  const deleted = [];
+  setFetch((url, init) => {
+    if (init.method === 'GET') {
+      const page = Number(new URL(url).searchParams.get('page'));
+      const result = page === 1
+        ? Array.from({ length: 50 }, (_, i) => rule(`p1-${i}`, '4.4.4.4'))
+        : [rule('p2-0', '4.4.4.4')];
+      return cfOk(result, { page, per_page: 50, total_pages: 2, total_count: 51 });
+    }
+    if (init.method === 'DELETE') {
+      deleted.push(url);
+      return cfOk({ id: 'deleted' });
+    }
+    return cfOk(null);
+  });
+
+  const handler = (await loadRpc({ targets: ['4.4.4.4'] }))[unblockPath];
+  const out = await handler();
+  assert.equal(out.deleted_count, 51);
+  assert.equal(deleted.length, 51);
+  assert.equal(out.deleted_ids.at(-1), 'p2-0');
+});
+
 test('UnblockIP treats a concurrent DELETE 404 as already unblocked', async () => {
   setFetch((url, init) => {
     if (init.method === 'GET') return cfOk([rule('gone', '7.7.7.7')]);
@@ -223,6 +350,30 @@ test('UnblockIP treats a concurrent DELETE 404 as already unblocked', async () =
   const out = await handler();
   assert.deepEqual(out.deleted_ids, []);
   assert.equal(out.deleted_count, 0);
+});
+
+test('UnblockIP reports completed deletions when a later delete fails', async () => {
+  let deletes = 0;
+  setFetch((url, init) => {
+    if (init.method === 'GET') {
+      return cfOk([rule('deleted-first', '7.7.7.7'), rule('rate-limited', '7.7.7.7')]);
+    }
+    if (init.method === 'DELETE') {
+      deletes += 1;
+      if (deletes === 2) return { status: 429, body: { success: false, errors: [] } };
+      return cfOk({ id: 'deleted-first' });
+    }
+    return cfOk(null);
+  });
+
+  const handler = (await loadRpc({ targets: ['7.7.7.7'] }))[unblockPath];
+  await assert.rejects(handler(), (err) => {
+    assert.equal(err.legacyCode, 'RESOURCE_EXHAUSTED');
+    assert.deepEqual(err.partial_deleted_ids, ['deleted-first']);
+    assert.equal(err.partial_deleted_count, 1);
+    assert.match(err.message, /partial_deleted_ids=\["deleted-first"\]/);
+    return true;
+  });
 });
 
 test('ListAccessRules maps rules, total_count, and pagination query', async () => {
@@ -252,7 +403,7 @@ test('ListAccessRules falls back total_count to length and validates paging', as
   setFetch(() => cfOk([]));
   const badPage = (await loadRpc({ page: 0 }))[listPath];
   await assert.rejects(badPage(), /page must be an integer >= 1/);
-  const badPer = (await loadRpc({ per_page: 5000 }))[listPath];
+  const badPer = (await loadRpc({ per_page: 51 }))[listPath];
   await assert.rejects(badPer(), /per_page must be an integer/);
   const nanPer = (await loadRpc({ per_page: 'x' }))[listPath];
   await assert.rejects(nanPer(), /per_page must be an integer/);
@@ -312,12 +463,26 @@ test('auth: missing token errors; legacy email+key used as fallback', async () =
   assert.equal(headers['x-auth-email'], 'a@b.com');
   assert.equal(headers['x-auth-key'], 'k');
   assert.equal(headers.authorization, undefined);
+
+  setFetch(() => ({ throwNetwork: 'proxy echoed x-auth-email: a@b.com and x-auth-key: k' }));
+  const redacted = (await loadRpc({ value: '1.1.1.1' }, {
+    bindings: { zoneId: 'z', apiToken: '', authEmail: 'a@b.com', authKey: 'k' },
+  }))[listPath];
+  await assert.rejects(redacted(), (err) => {
+    assert.doesNotMatch(err.message, /a@b\.com|x-auth-key: k/);
+    assert.match(err.message, /x-auth-email=\[REDACTED\]/);
+    return true;
+  });
 });
 
-test('error mapping: http 403, http 400, success:false, auth code, network, bad json', async () => {
+test('error mapping: http 403, 429, 400, success:false, auth code, network, bad json', async () => {
   setFetch(() => ({ status: 403, body: { success: false, errors: [{ code: 9109 }] } }));
   let h = (await loadRpc({ value: '1.1.1.1' }))[listPath];
   await assert.rejects(h(), /PERMISSION_DENIED.*upstream http 403/);
+
+  setFetch(() => ({ status: 429, body: { success: false, errors: [{ code: 10000 }] } }));
+  h = (await loadRpc({ value: '1.1.1.1' }))[listPath];
+  await assert.rejects(h(), /RESOURCE_EXHAUSTED.*upstream http 429/);
 
   setFetch(() => ({ status: 400, body: { success: false, errors: [{ code: 1004 }] } }));
   h = (await loadRpc({ value: '1.1.1.1' }))[listPath];

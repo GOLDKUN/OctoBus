@@ -13,9 +13,27 @@ const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MODE = 'block';
 const ACCESS_RULE_MODES = ['block', 'challenge', 'whitelist', 'js_challenge', 'managed_challenge'];
 const SECURITY_LEVELS = ['off', 'essentially_off', 'low', 'medium', 'high', 'under_attack'];
-const MAX_PER_PAGE = 1000;
+// Cloudflare's IP Access Rules list endpoint accepts at most 50 entries per page.
+const MAX_PER_PAGE = 50;
+const RULE_SCAN_PER_PAGE = 50;
+const MAX_RULE_SCAN_PAGES = 1000;
 
 let insecureTlsDispatcher;
+const blockLocks = new Map();
+
+const withBlockLock = async (key, operation) => {
+  const previous = blockLocks.get(key) ?? Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => { release = resolve; });
+  blockLocks.set(key, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (blockLocks.get(key) === current) blockLocks.delete(key);
+  }
+};
 
 const getInsecureTlsDispatcher = () => {
   insecureTlsDispatcher ??= new Agent({ connect: { rejectUnauthorized: false } });
@@ -108,7 +126,7 @@ const redact = (value, secrets = []) => {
   for (const secret of secrets) {
     if (secret) text = text.replaceAll(secret, '[REDACTED]');
   }
-  return text.replace(/(authorization|x-auth-key|api[_ -]?token)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]');
+  return text.replace(/(authorization|x-auth-key|x-auth-email|api[_ -]?token)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]');
 };
 
 const readResponseText = async (response, maxResponseBytes) => {
@@ -151,12 +169,13 @@ const requireTargets = (req, keys) => {
       if (val.length === 0) {
         throw errorWithCode('INVALID_ARGUMENT', `${key} must be non-empty`);
       }
-      return val.map((item) => {
+      const targets = val.map((item) => {
         if (item === undefined || item === null || String(item).trim() === '') {
           throw errorWithCode('INVALID_ARGUMENT', `${key} elements must be non-empty strings`);
         }
         return String(item).trim();
       });
+      return [...new Set(targets)];
     }
   }
   throw errorWithCode('INVALID_ARGUMENT', `${keys[0]} is required`);
@@ -273,7 +292,7 @@ export function rpcdef(ctx) {
       if (isTimeoutError(e)) {
         throw errorWithCode('DEADLINE_EXCEEDED', `upstream request timed out after ${timeoutMs}ms`);
       }
-      const reason = redact(e?.cause?.message || e?.message || 'fetch failed', [apiToken, authKey]);
+      const reason = redact(e?.cause?.message || e?.message || 'fetch failed', [apiToken, authKey, authEmail]);
       throw errorWithCode('UNAVAILABLE', reason);
     }
 
@@ -285,7 +304,7 @@ export function rpcdef(ctx) {
       if (isTimeoutError(e)) {
         throw errorWithCode('DEADLINE_EXCEEDED', `upstream request timed out after ${timeoutMs}ms`);
       }
-      throw errorWithCode('UNAVAILABLE', redact(e?.cause?.message || e?.message || 'response read failed', [apiToken, authKey]));
+      throw errorWithCode('UNAVAILABLE', redact(e?.cause?.message || e?.message || 'response read failed', [apiToken, authKey, authEmail]));
     }
     if (!res.ok) {
       const upstreamError = (code) => {
@@ -295,6 +314,9 @@ export function rpcdef(ctx) {
       };
       if (res.status === 401 || res.status === 403) {
         throw upstreamError('PERMISSION_DENIED');
+      }
+      if (res.status === 429) {
+        throw upstreamError('RESOURCE_EXHAUSTED');
       }
       if (res.status >= 400 && res.status < 500) {
         throw upstreamError('FAILED_PRECONDITION');
@@ -312,7 +334,7 @@ export function rpcdef(ctx) {
     }
 
     if (json && json.success === false) {
-      const detail = Array.isArray(json.errors) ? redact(JSON.stringify(json.errors), [apiToken, authKey]) : 'cloudflare reported success=false';
+      const detail = Array.isArray(json.errors) ? redact(JSON.stringify(json.errors), [apiToken, authKey, authEmail]) : 'cloudflare reported success=false';
       const authFailure = Array.isArray(json.errors)
         && json.errors.some((e) => Number(e?.code) === 9109 || Number(e?.code) === 10000);
       throw errorWithCode(authFailure ? 'PERMISSION_DENIED' : 'FAILED_PRECONDITION', detail);
@@ -342,12 +364,36 @@ export function rpcdef(ctx) {
   };
 
   const fetchRulesForValue = async (scopeInfo, value, mode) => {
-    const query = [`configuration.value=${encodeURIComponent(value)}`, 'per_page=50'];
-    if (mode) query.push(`mode=${encodeURIComponent(mode)}`);
-    const url = `${scopeInfo.base}?${query.join('&')}`;
-    const json = await callCloudflare(url, { method: 'GET', headers: buildHeaders() });
-    const result = Array.isArray(json?.result) ? json.result : [];
-    return result;
+    const rules = [];
+    for (let page = 1; page <= MAX_RULE_SCAN_PAGES; page += 1) {
+      const query = [
+        `configuration.value=${encodeURIComponent(value)}`,
+        `page=${page}`,
+        `per_page=${RULE_SCAN_PER_PAGE}`,
+      ];
+      if (mode) query.push(`mode=${encodeURIComponent(mode)}`);
+      const url = `${scopeInfo.base}?${query.join('&')}`;
+      const json = await callCloudflare(url, { method: 'GET', headers: buildHeaders() });
+      const result = Array.isArray(json?.result) ? json.result : [];
+      rules.push(...result);
+
+      const totalPages = Number(json?.result_info?.total_pages);
+      if (Number.isSafeInteger(totalPages) && totalPages >= 0) {
+        if (page >= totalPages) return rules;
+        continue;
+      }
+
+      const totalCount = Number(json?.result_info?.total_count);
+      if (Number.isSafeInteger(totalCount) && totalCount >= 0) {
+        if (rules.length >= totalCount) return rules;
+        continue;
+      }
+
+      // Compatible endpoints may omit result_info. A short page is the only
+      // reliable termination signal in that case.
+      if (result.length < RULE_SCAN_PER_PAGE) return rules;
+    }
+    throw errorWithCode('RESOURCE_EXHAUSTED', `access-rule query exceeded ${MAX_RULE_SCAN_PAGES} pages`);
   };
 
   const callBlockIp = async (req) => {
@@ -358,25 +404,37 @@ export function rpcdef(ctx) {
 
     const rules = [];
     let createdCount = 0;
+    const createdIds = [];
     for (const value of targets) {
-      const existing = await fetchRulesForValue(scopeInfo, value, mode);
-      const match = existing.find((r) => String(r?.configuration?.value) === value && String(r?.mode) === mode);
-      if (match) {
-        rules.push(mapAccessRule(match, scopeInfo.scope));
-        continue;
+      const lockKey = `${scopeInfo.base}\0${mode}\0${value}`;
+      try {
+        const outcome = await withBlockLock(lockKey, async () => {
+          const existing = await fetchRulesForValue(scopeInfo, value, mode);
+          const match = existing.find((r) => String(r?.configuration?.value) === value && String(r?.mode) === mode);
+          if (match) return { rule: mapAccessRule(match, scopeInfo.scope), created: false };
+          const payload = {
+            mode,
+            configuration: { target: inferTarget(value), value },
+          };
+          if (notes !== undefined) payload.notes = notes;
+          const json = await callCloudflare(scopeInfo.base, {
+            method: 'POST',
+            headers: buildHeaders({ 'content-type': 'application/json' }),
+            body: JSON.stringify(payload),
+          });
+          return { rule: mapAccessRule(json?.result ?? {}, scopeInfo.scope), created: true };
+        });
+        rules.push(outcome.rule);
+        if (outcome.created) {
+          createdCount += 1;
+          if (outcome.rule.id) createdIds.push(outcome.rule.id);
+        }
+      } catch (e) {
+        e.partial_created_ids = createdIds.slice();
+        e.partial_created_count = createdCount;
+        e.message = `${e.message}; partial_created_ids=${JSON.stringify(e.partial_created_ids)}`;
+        throw e;
       }
-      const payload = {
-        mode,
-        configuration: { target: inferTarget(value), value },
-      };
-      if (notes !== undefined) payload.notes = notes;
-      const json = await callCloudflare(scopeInfo.base, {
-        method: 'POST',
-        headers: buildHeaders({ 'content-type': 'application/json' }),
-        body: JSON.stringify(payload),
-      });
-      rules.push(mapAccessRule(json?.result ?? {}, scopeInfo.scope));
-      createdCount += 1;
     }
 
     return { rules, created_count: createdCount };
@@ -402,6 +460,11 @@ export function rpcdef(ctx) {
           });
         } catch (e) {
           if (e?.httpStatus === 404) continue;
+          // Preserve the completed portion for in-process callers and include
+          // it in the transported gRPC error message for remote reconciliation.
+          e.partial_deleted_ids = deletedIds.slice();
+          e.partial_deleted_count = deletedIds.length;
+          e.message = `${e.message}; partial_deleted_ids=${JSON.stringify(e.partial_deleted_ids)}`;
           throw e;
         }
         deletedIds.push(id);

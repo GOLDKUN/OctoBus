@@ -37,20 +37,20 @@ message AccessRule {
 message BlockIPRequest {
   string zone_id = 1;             // Zone ID，可选；缺省时使用配置中的 zoneId
   string account_id = 2;          // Account ID，可选；提供则使用 account 维度（优先于 zone）
-  repeated string targets = 3;    // 待封禁的 IP/CIDR 列表，必填且非空
+  repeated string targets = 3;    // 待封禁的 IP/CIDR 列表，必填且非空；重复值仅处理一次
   string mode = 4;                // 规则模式，可选，默认 block；允许 block/challenge/whitelist/js_challenge/managed_challenge
   string notes = 5;               // 备注，可选，仅在创建新规则时写入
 }
 
 message BlockIPResponse {
-  repeated AccessRule rules = 1;  // 创建或已存在的规则列表，与 targets 一一对应
+  repeated AccessRule rules = 1;  // 创建或已存在的规则列表，与去重后的 targets 一一对应
   int64 created_count = 2;        // 实际新建的规则数（已存在的不计入）
 }
 
 message UnblockIPRequest {
   string zone_id = 1;             // Zone ID，可选；缺省时使用配置中的 zoneId
   string account_id = 2;          // Account ID，可选；提供则使用 account 维度（优先于 zone）
-  repeated string targets = 3;    // 待解封的 IP/CIDR 列表，必填且非空
+  repeated string targets = 3;    // 待解封的 IP/CIDR 列表，必填且非空；重复值仅处理一次
   string mode = 4;                // 可选，仅删除指定模式的规则；缺省删除匹配该 IP 的任意模式规则
 }
 
@@ -65,7 +65,7 @@ message ListAccessRulesRequest {
   string value = 3;                         // 可选，按 IP/值精确匹配
   string mode = 4;                          // 可选，按模式过滤
   google.protobuf.Int64Value page = 5;      // 可选，页码，>=1
-  google.protobuf.Int64Value per_page = 6;  // 可选，每页条数，1~1000
+  google.protobuf.Int64Value per_page = 6;  // 可选，每页条数，1~50（Cloudflare 上游限制）
 }
 
 message ListAccessRulesResponse {

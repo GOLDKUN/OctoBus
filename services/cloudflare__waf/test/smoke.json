@@ -6,6 +6,7 @@
   },
   "requireBusinessSuccess": true,
   "requireUpstreamPerProtocol": true,
+  "protocols": ["connect", "grpc", "mcp"],
   "upstream": {
     "method": "GET"
   }

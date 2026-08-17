@@ -29,14 +29,14 @@ Secret: `apiToken` (Bearer, recommended) or `authEmail` + `authKey` (legacy glob
 
 ## Behavior
 
-- `BlockIP` calls `POST /…/firewall/access_rules/rules`. Idempotent: reuses an existing rule with the same target and mode instead of creating a duplicate.
-- `UnblockIP` calls `DELETE /…/firewall/access_rules/rules/{id}`. Idempotent: no matching rule returns `deleted_count=0`.
+- `BlockIP` calls `POST /…/firewall/access_rules/rules`. Duplicate targets in one request are processed once, and concurrent creation of the same scope, target, and mode is serialized within the service process before rechecking upstream. If a later create fails, the gRPC error includes `partial_created_ids` for reconciliation or safe whole-request retry.
+- `UnblockIP` calls `DELETE /…/firewall/access_rules/rules/{id}`. Duplicate targets are processed once and no matching rule returns `deleted_count=0`. If a later delete fails, the gRPC error includes `partial_deleted_ids` so callers can reconcile or safely retry the whole request.
 - `ListAccessRules` calls `GET /…/firewall/access_rules/rules` with optional `value`, `mode`, `page`, and `per_page` filters.
 - `GetSecurityLevel` calls `GET /zones/{zone}/settings/security_level`.
 - `SetSecurityLevel` calls `PATCH /zones/{zone}/settings/security_level`. Idempotent.
 - Each request carries `x-engine-instance` and `x-request-id` audit headers.
 - Redirects are rejected, response bodies are bounded, and credential values are redacted from propagated transport errors.
-- Missing scope or credentials returns `INVALID_ARGUMENT`. HTTP 401/403 or Cloudflare error codes 9109/10000 map to `PERMISSION_DENIED`. Other `success:false` responses map to `FAILED_PRECONDITION`. Network errors and 5xx map to `UNAVAILABLE`.
+- Missing scope or credentials returns `INVALID_ARGUMENT`. HTTP 401/403 or Cloudflare error codes 9109/10000 map to `PERMISSION_DENIED`; HTTP 429 maps to `RESOURCE_EXHAUSTED`. Other `success:false` responses map to `FAILED_PRECONDITION`. Network errors and 5xx map to `UNAVAILABLE`.
 
 ## Local Checks
 
