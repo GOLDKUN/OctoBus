@@ -143,6 +143,14 @@ test('password whitespace is preserved for Keystone authentication', () => {
   assert.equal(body.auth.identity.password.user.password, ' secret ');
 });
 
+test('legacy projectName binding is rejected instead of silently losing project scope', () => {
+  assert.throws(
+    () => _test.resolveProjectName({ projectName: 'legacy-project' }),
+    (err) => err?.legacyCode === 'INVALID_ARGUMENT' && /use project_name/.test(err.message),
+  );
+  assert.equal(_test.resolveProjectName({ project_name: 'service' }), 'service');
+});
+
 test('project domain defaults independently from a custom user domain', () => {
   const body = _test.buildAuthRequestBody(buildCtx({ config: { project_domain_name: '', user_domain_name: 'LDAP' } }));
   assert.equal(body.auth.identity.password.user.domain.name, 'LDAP');
