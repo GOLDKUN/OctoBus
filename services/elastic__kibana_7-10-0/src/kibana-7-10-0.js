@@ -128,11 +128,17 @@ const resolveMaxResponseBytes = (ctx = {}) => {
   return Math.min(Math.trunc(raw), MAX_RESPONSE_BYTES);
 };
 
-const shouldSkipTlsVerify = (bindings = {}) => [
-  bindings.skipTlsVerify,
-  bindings.tlsInsecureSkipVerify,
-  bindings.insecureSkipVerify,
-].some((value) => value !== undefined && toBool(value, false));
+const shouldSkipTlsVerify = (bindings = {}) => {
+  const values = [
+    bindings.skipTlsVerify,
+    bindings.tlsInsecureSkipVerify,
+    bindings.insecureSkipVerify,
+  ].filter((value) => value !== undefined && value !== null).map((value) => toBool(value, false));
+  if (values.includes(true) && values.includes(false)) {
+    throw errorWithCode('INVALID_ARGUMENT', 'conflicting TLS skip aliases');
+  }
+  return values.length > 0 && values[0];
+};
 
 const createTlsDispatcher = async (skipTlsVerify) => {
   if (!skipTlsVerify) return undefined;

@@ -286,11 +286,19 @@ test('base URLs with credentials, queries, or fragments are rejected and log URL
   assert.equal(_test.toJsonString(circular), '');
 });
 
-test('TLS skip aliases are equivalent and any true value wins conflicts', () => {
-  assert.equal(_test.shouldSkipTlsVerify({ skipTlsVerify: 'false', insecureSkipVerify: true }), true);
-  assert.equal(_test.shouldSkipTlsVerify({ skipTlsVerify: false, tlsInsecureSkipVerify: false, insecureSkipVerify: 'off' }), false);
+test('TLS skip aliases default safely, agree, and reject conflicts', async () => {
+  assert.equal(_test.shouldSkipTlsVerify({}), false);
   assert.equal(_test.shouldSkipTlsVerify({ tlsInsecureSkipVerify: true }), true);
-  assert.equal(_test.shouldSkipTlsVerify({ insecureSkipVerify: 'on' }), true);
+  assert.equal(_test.shouldSkipTlsVerify({ skipTlsVerify: false, tlsInsecureSkipVerify: false, insecureSkipVerify: 'off' }), false);
+  assert.equal(_test.shouldSkipTlsVerify({ skipTlsVerify: true, tlsInsecureSkipVerify: 'true', insecureSkipVerify: 'on' }), true);
+  assert.throws(
+    () => _test.shouldSkipTlsVerify({ skipTlsVerify: false, insecureSkipVerify: true }),
+    (err) => err.legacyCode === 'INVALID_ARGUMENT' && !err.message.includes('true') && !err.message.includes('false'),
+  );
+  await assert.rejects(
+    _test.buildTlsOptions({ skipTlsVerify: false, tlsInsecureSkipVerify: true }),
+    (err) => err.legacyCode === 'INVALID_ARGUMENT',
+  );
 });
 
 test('JSON parse and body readers cover empty, malformed, declared, and fallback responses', async () => {

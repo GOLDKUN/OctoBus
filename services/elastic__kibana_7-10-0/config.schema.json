@@ -27,18 +27,15 @@
     },
     "skipTlsVerify": {
       "type": "boolean",
-      "default": false,
-      "description": "Skip TLS certificate verification. Strictly equivalent to tlsInsecureSkipVerify and insecureSkipVerify: if any alias is true, verification is skipped; false does not override another true alias."
+      "description": "Skip TLS certificate verification. Equivalent to tlsInsecureSkipVerify and insecureSkipVerify; explicitly configured aliases must agree or the request is rejected. Omitted means false."
     },
     "tlsInsecureSkipVerify": {
       "type": "boolean",
-      "default": false,
-      "description": "Strict alias for skipTlsVerify. If any TLS-skip alias is true, verification is skipped; false does not override another true alias."
+      "description": "Alias for skipTlsVerify. Explicitly configured TLS-skip aliases must agree or the request is rejected. Omitted means false."
     },
     "insecureSkipVerify": {
       "type": "boolean",
-      "default": false,
-      "description": "Strict alias for skipTlsVerify. If any TLS-skip alias is true, verification is skipped; false does not override another true alias."
+      "description": "Alias for skipTlsVerify. Explicitly configured TLS-skip aliases must agree or the request is rejected. Omitted means false."
     }
   }
 }

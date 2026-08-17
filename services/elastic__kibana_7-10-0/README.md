@@ -24,11 +24,12 @@ OctoBus service package for Kibana 7.10.0 read-only operations via the Kibana RE
 | `tlsInsecureSkipVerify` | boolean | No | Strict alias of `skipTlsVerify` |
 | `insecureSkipVerify` | boolean | No | Strict alias of `skipTlsVerify` |
 
-The three TLS-skip fields are equivalent and use any-true semantics: if any
-one is `true`, certificate verification is skipped. A `false` value cannot
-override a different alias set to `true`. Avoid conflicting values and leave
-all three `false` unless an explicitly trusted private deployment requires
-self-signed certificate support.
+The three TLS-skip fields are equivalent. Omitted fields mean certificate
+verification remains enabled. If more than one alias is explicitly configured,
+all configured values must agree; a `true`/`false` conflict is rejected with
+`INVALID_ARGUMENT` instead of silently weakening or overriding TLS policy.
+Leave the fields omitted or `false` unless an explicitly trusted private
+deployment requires self-signed certificate support.
 
 ## Secrets
 
