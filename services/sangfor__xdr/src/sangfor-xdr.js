@@ -12,6 +12,14 @@ function encodedRequired(req, key) {
   return encodeURIComponent(requiredString(req, key));
 }
 
+function encodedRequiredOneOf(req, keys) {
+  for (const key of keys) {
+    const value = req?.[key];
+    if (typeof value === "string" && value.trim() !== "") return encodeURIComponent(value);
+  }
+  throw new GrpcError(grpcStatus.INVALID_ARGUMENT, `${keys.join(" or ")} is required`);
+}
+
 const assetHandlers = {
   "sangfor_xdr.AssetService/ListAssets": async (req, ctx) => {
     const params = new URLSearchParams({ _method: "GET", page: String(req.page || 1), pageSize: String(req.pageSize || 20) });
@@ -169,12 +177,12 @@ const incidentHandlers = {
   },
 
   "sangfor_xdr.IncidentService/GetLogDetail": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/analysis/analysisDetail?uuid=${encodedRequired(req, "uuid")}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/analysis/analysisDetail?uuid=${encodedRequiredOneOf(req, ["uuid", "logId"])}` });
     return { id: r.data?.id ?? "", logType: r.data?.logType ?? "", timestamp: r.data?.timestamp ?? "", source: r.data?.source ?? "", rawData: r.data?.rawData ?? "", fields: r.data?.fields ?? {} };
   },
 
   "sangfor_xdr.IncidentService/GetESideLogDetail": async (req, ctx) => {
-    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/analysis/eSide/analysisDetail?uuid=${encodedRequired(req, "uuid")}` });
+    const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/analysis/eSide/analysisDetail?uuid=${encodedRequiredOneOf(req, ["uuid", "logId"])}` });
     return { id: r.data?.id ?? "", logType: r.data?.logType ?? "", timestamp: r.data?.timestamp ?? "", source: r.data?.source ?? "", rawData: r.data?.rawData ?? "", fields: r.data?.fields ?? {} };
   },
 

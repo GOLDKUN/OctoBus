@@ -318,6 +318,16 @@ describe("complete handler and client coverage", () => {
       globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => '{"code":4001,"msg":"invalid request"}' });
       await assert.rejects(signedRequest({ config: { endpoint: "https://xdr.example" }, secret: { ak: "ak", sk: "sk" }, method: "GET", path: "/api" }), /4001/);
 
+      globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => '{"success":true,"code":200,"message":"ok"}' });
+      const successWithNonzeroCode = await signedRequest({ config: { endpoint: "https://xdr.example" }, secret: { ak: "ak", sk: "sk" }, method: "GET", path: "/api" });
+      assert.strictEqual(successWithNonzeroCode.data.success, true);
+
+      globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => '{"success":false,"code":4001,"msg":"host not found"}' });
+      const failedAction = await service.handlers["sangfor_xdr.ResponseService/BanIP"]({ ip: "192.0.2.1" }, makeCtx());
+      assert.deepStrictEqual(failedAction, { success: false, message: "host not found", taskId: "" });
+      const failedUpdate = await service.handlers["sangfor_xdr.AssetService/UpdateAsset"]({ assetId: "asset-1" }, makeCtx());
+      assert.deepStrictEqual(failedUpdate, { success: false, message: "host not found" });
+
       await assert.rejects(
         service.handlers["sangfor_xdr.AssetService/GetAsset"]({}, makeCtx()),
         /assetId is required/,
@@ -338,6 +348,16 @@ describe("complete handler and client coverage", () => {
       assert.strictEqual(captured.init.headers.accept, "application/json");
       assert.strictEqual(captured.init.headers["content-type"], "application/json");
       assert.ok(captured.init.signal instanceof AbortSignal);
+      await service.handlers["sangfor_xdr.IncidentService/GetLogDetail"]({ uuid: "uuid /1" }, makeCtx());
+      assert.match(captured.url, /analysisDetail\?uuid=uuid%20%2F1$/);
+      await service.handlers["sangfor_xdr.IncidentService/GetLogDetail"]({ logId: "log /1" }, makeCtx());
+      assert.match(captured.url, /analysisDetail\?uuid=log%20%2F1$/);
+      await service.handlers["sangfor_xdr.IncidentService/GetESideLogDetail"]({ uuid: "e-uuid /1" }, makeCtx());
+      assert.match(captured.url, /eSide\/analysisDetail\?uuid=e-uuid%20%2F1$/);
+      await service.handlers["sangfor_xdr.IncidentService/GetESideLogDetail"]({ logId: "e-log /1" }, makeCtx());
+      assert.match(captured.url, /eSide\/analysisDetail\?uuid=e-log%20%2F1$/);
+      await assert.rejects(service.handlers["sangfor_xdr.IncidentService/GetLogDetail"]({}, makeCtx()), /uuid or logId is required/);
+      await assert.rejects(service.handlers["sangfor_xdr.IncidentService/GetESideLogDetail"]({}, makeCtx()), /uuid or logId is required/);
       await signedRequest({
         config: { endpoint: "https://xdr.example", headers: { Accept: "application/xml" } },
         secret: { ak: "ak", sk: "sk" }, method: "GET",

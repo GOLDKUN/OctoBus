@@ -180,7 +180,7 @@ export async function signedRequest({ config, secret, method, path, body }) {
     });
   }
 
-  if (typeof data?.code === "number" && data.code !== 0) {
+  if (typeof data?.success !== "boolean" && typeof data?.code === "number" && data.code !== 0) {
     throw upstreamError("INVALID_ARGUMENT", `XDR business error: ${data.code}`, {
       httpStatus: res.status,
       reason: String(data.msg ?? data.message ?? "business request failed"),
