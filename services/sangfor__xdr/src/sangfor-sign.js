@@ -20,12 +20,12 @@ function hmacSha256(key, data) {
   return crypto.createHmac("sha256", key).update(data).digest();
 }
 
-function sortQueryStr(queryString) {
+export function canonicalizeQuery(queryString) {
   if (!queryString) return "";
   const params = new URLSearchParams(queryString);
   const entries = [];
   for (const [key, value] of params.entries()) {
-    entries.push(`${key}=${value}`);
+    entries.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
   }
   entries.sort();
   return entries.join("&");
@@ -69,7 +69,7 @@ export function createSign({ ak, sk, method, uri, queryString, host, payload, he
   const canonicalLines = [];
   canonicalLines.push(method.toUpperCase());
   canonicalLines.push(uri.endsWith("/") ? uri : uri + "/");
-  canonicalLines.push(sortQueryStr(queryString || ""));
+  canonicalLines.push(canonicalizeQuery(queryString || ""));
   for (const key of sortedHeaderKeys) {
     canonicalLines.push(`${key}:${headerMap[key]}`);
   }

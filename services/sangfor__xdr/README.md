@@ -15,8 +15,7 @@ octobus service import --id sangfor-xdr ./services/sangfor__xdr
 ```json
 {
   "xdrBaseUrl": "https://xdr.example.com",
-  "timeoutMs": 10000,
-  "skipTlsVerify": false
+  "timeoutMs": 10000
 }
 ```
 

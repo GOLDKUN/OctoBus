@@ -8,6 +8,8 @@ import { GrpcError, grpcStatus } from "@chaitin-ai/octobus-sdk";
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj ?? {}, key);
 
 const firstDefined = (...values) => values.find((v) => v !== undefined && v !== null);
+const DEFAULT_TIMEOUT_MS = 10_000;
+const MAX_TIMEOUT_MS = 300_000;
 
 const unwrapString = (value) => {
   if (value === undefined || value === null) return "";
@@ -23,7 +25,36 @@ export const resolveBaseUrl = (config = {}) => {
     config.baseUrl,
   )).trim().replace(/\/+$/, "");
   if (!raw) throw new Error("xdrBaseUrl/endpoint is required in config");
-  return raw;
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("xdrBaseUrl/endpoint must be an absolute HTTP(S) URL");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("xdrBaseUrl/endpoint must use HTTP or HTTPS");
+  }
+  return url.toString().replace(/\/+$/, "");
+};
+
+export const resolveTimeoutMs = (config = {}) => {
+  const raw = firstDefined(config.timeoutMs, DEFAULT_TIMEOUT_MS);
+  const timeoutMs = Number(unwrapString(raw));
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS) {
+    throw new Error(`timeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS}`);
+  }
+  return timeoutMs;
+};
+
+const resolveHeaders = (config = {}) => {
+  if (config.headers === undefined || config.headers === null) return {};
+  if (typeof config.headers !== "object" || Array.isArray(config.headers)) {
+    throw new Error("headers must be an object of string values");
+  }
+  return Object.fromEntries(Object.entries(config.headers).map(([key, value]) => {
+    if (typeof value !== "string") throw new Error(`header ${key} must be a string`);
+    return [key.toLowerCase(), value];
+  }));
 };
 
 export const resolveAccessKey = (secret = {}) => {
@@ -69,6 +100,8 @@ export async function signedRequest({ config, secret, method, path, body }) {
   const baseUrl = resolveBaseUrl(config);
   const ak = resolveAccessKey(secret);
   const sk = resolveSecretKey(secret);
+  const timeoutMs = resolveTimeoutMs(config);
+  const configuredHeaders = resolveHeaders(config);
 
   const url = new URL(path, baseUrl);
   const uri = url.pathname;
@@ -76,15 +109,20 @@ export async function signedRequest({ config, secret, method, path, body }) {
   const host = url.host;
   const payload = body ? JSON.stringify(body) : "";
 
-  const signHeaders = createSign({ ak, sk, method: method.toUpperCase(), uri, queryString, host, payload, headers: {} });
+  const signHeaders = createSign({ ak, sk, method: method.toUpperCase(), uri, queryString, host, payload, headers: configuredHeaders });
 
   const headers = {
+    ...configuredHeaders,
     "Content-Type": "application/json",
     Accept: "application/json",
     ...signHeaders,
   };
 
-  const fetchOptions = { method: method.toUpperCase(), headers };
+  const fetchOptions = {
+    method: method.toUpperCase(),
+    headers,
+    signal: AbortSignal.timeout(timeoutMs),
+  };
   if (body && method.toUpperCase() !== "GET") {
     fetchOptions.body = payload;
   }

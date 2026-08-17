@@ -2,8 +2,8 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 
 import { service } from "../src/service.js";
-import { createSign, isSignExpired } from "../src/sangfor-sign.js";
-import { resolveAccessKey, resolveBaseUrl, resolveSecretKey, signedRequest } from "../src/xdr-client.js";
+import { canonicalizeQuery, createSign, isSignExpired } from "../src/sangfor-sign.js";
+import { resolveAccessKey, resolveBaseUrl, resolveSecretKey, resolveTimeoutMs, signedRequest } from "../src/xdr-client.js";
 import { MockXdrServer } from "./mock_upstream.js";
 
 const mock = new MockXdrServer();
@@ -91,12 +91,17 @@ describe("AssetService", () => {
     const result = await service.handlers["sangfor_xdr.AssetService/GetAsset"]({ assetId: "a1" }, makeCtx());
     assert.strictEqual(result.id, "a1");
     assert.strictEqual(result.name, "asset-1");
+    assert.strictEqual(result.riskLevel, "low");
+    assert.strictEqual(result.groupName, "Default");
+    assert.strictEqual(result.responsiblePerson, "admin");
+    assert.strictEqual(result.lastSeen, "2026-06-01");
+    assert.strictEqual(result.vulnCount, 3);
   });
 
   it("GetAssetCard returns summary", async () => {
     const result = await service.handlers["sangfor_xdr.AssetService/GetAssetCard"]({}, makeCtx());
     assert.strictEqual(result.total, 50);
-    assert.strictEqual(result.serverCount, result.serverCount);
+    assert.strictEqual(result.serverCount, 20);
     assert.ok(result.total > 0);
   });
 
@@ -115,6 +120,7 @@ describe("AssetService", () => {
     const result = await service.handlers["sangfor_xdr.AssetService/GetAssetStats"]({}, makeCtx());
     assert.strictEqual(result.total, 50);
     assert.strictEqual(result.online, 48);
+    assert.strictEqual(result.highRisk, 3);
   });
 });
 
@@ -135,12 +141,16 @@ describe("IncidentService", () => {
     const result = await service.handlers["sangfor_xdr.IncidentService/ListIncidents"]({ page: 1, pageSize: 20 }, makeCtx());
     assert.strictEqual(result.total, 5);
     assert.strictEqual(result.items[0].uuid, "inc-001");
+    assert.strictEqual(result.items[0].sourceIp, "10.0.0.99");
+    assert.strictEqual(result.items[0].assetName, "asset-1");
+    assert.strictEqual(result.items[0].detectTime, "2026-06-20T10:00:00Z");
   });
 
   it("ListAlerts returns alerts", async () => {
     const result = await service.handlers["sangfor_xdr.IncidentService/ListAlerts"]({ page: 1, pageSize: 20 }, makeCtx());
     assert.strictEqual(result.total, 1);
     assert.strictEqual(result.items[0].id, "alert-001");
+    assert.strictEqual(result.items[0].targetIp, "10.0.0.1");
   });
 });
 
@@ -272,11 +282,15 @@ describe("complete handler and client coverage", () => {
     assert.strictEqual(resolveAccessKey({ ak: { value: "ak" } }), "ak");
     assert.strictEqual(resolveSecretKey({ sk: { value: "sk" } }), "sk");
     assert.throws(() => resolveBaseUrl({}), /required/);
+    assert.throws(() => resolveBaseUrl({ endpoint: "file:///tmp/xdr" }), /HTTP/);
     assert.throws(() => resolveAccessKey({}), /required/);
     assert.throws(() => resolveSecretKey({}), /required/);
+    assert.strictEqual(resolveTimeoutMs({ timeoutMs: { value: "2500" } }), 2500);
+    assert.throws(() => resolveTimeoutMs({ timeoutMs: 0 }), /integer/);
 
     const signed = createSign({ ak: "ak", sk: "sk", method: "get", uri: "/api", queryString: "b=2&a=1", host: "xdr.example", payload: "{}", headers: { "x-extra": "yes" } });
     assert.match(signed.Authorization, /HMAC-SHA256/);
+    assert.strictEqual(canonicalizeQuery("keyword=%E4%B8%AD%E6%96%87%20a%2Bb%26c%3Dd&z=1"), "keyword=%E4%B8%AD%E6%96%87%20a%2Bb%26c%3Dd&z=1");
     assert.strictEqual(isSignExpired({}), true);
     assert.strictEqual(isSignExpired({ "sign-date": "20000101T000000Z" }), true);
 
@@ -296,6 +310,25 @@ describe("complete handler and client coverage", () => {
 
       globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => { throw new Error("read failed"); } });
       await assert.rejects(signedRequest({ config: { endpoint: "https://xdr.example" }, secret: { ak: "ak", sk: "sk" }, method: "GET", path: "/api" }), /UNAVAILABLE/);
+
+      let captured;
+      globalThis.fetch = async (url, init) => {
+        captured = { url, init };
+        return { ok: true, status: 200, text: async () => "{}" };
+      };
+      await signedRequest({
+        config: { endpoint: "https://xdr.example", timeoutMs: 1234, headers: { "X-Tenant": "tenant-1" } },
+        secret: { ak: "ak", sk: "sk" }, method: "GET",
+        path: "/api/xdr/v1/incident/u-1/disposalTabs?entityType=host",
+      });
+      assert.strictEqual(captured.url, "https://xdr.example/api/xdr/v1/incident/u-1/disposalTabs?entityType=host");
+      assert.strictEqual(captured.init.headers["x-tenant"], "tenant-1");
+      assert.ok(captured.init.signal instanceof AbortSignal);
+      await service.handlers["sangfor_xdr.IncidentService/GetDisposalTabs"](
+        { uuid: "u-1", entityType: "host" },
+        { config: { endpoint: "https://xdr.example" }, secret: { ak: "ak", sk: "sk" } },
+      );
+      assert.strictEqual(captured.url, "https://xdr.example/api/xdr/v1/incident/u-1/disposalTabs?entityType=host");
     } finally {
       globalThis.fetch = originalFetch;
     }

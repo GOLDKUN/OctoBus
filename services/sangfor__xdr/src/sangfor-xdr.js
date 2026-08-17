@@ -30,12 +30,12 @@ const assetHandlers = {
 
   "sangfor_xdr.AssetService/GetAssetStats": async (_req, ctx) => {
     const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: "/apps/asset/api/on_asset_statistics?_method=GET" });
-    return { total: r.data?.total ?? 0, online: r.data?.online ?? 0, offline: r.data?.offline ?? 0, highRisk: r.data?.highRisk ?? 0, mediumRisk: r.data?.mediumRisk ?? 0, lowRisk: r.data?.lowRisk ?? 0, changes: (r.data?.changes ?? []).map(c => ({ date: c.date ?? "", count: c.count ?? 0 })) };
+    return { total: r.data?.total ?? 0, online: r.data?.online ?? 0, offline: r.data?.offline ?? 0, highRisk: r.data?.highRisk ?? r.data?.high_risk ?? 0, mediumRisk: r.data?.mediumRisk ?? r.data?.medium_risk ?? 0, lowRisk: r.data?.lowRisk ?? r.data?.low_risk ?? 0, changes: (r.data?.changes ?? []).map(c => ({ date: c.date ?? "", count: c.count ?? 0 })) };
   },
 
   "sangfor_xdr.AssetService/GetAssetCard": async (_req, ctx) => {
     const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: "/apps/asset/api/v2/asset/get_asset_card" });
-    return { total: r.data?.total ?? 0, serverCount: r.data?.serverCount ?? 0, pcCount: r.data?.pcCount ?? 0, networkDeviceCount: r.data?.networkDeviceCount ?? 0, otherCount: r.data?.otherCount ?? 0 };
+    return { total: r.data?.total ?? 0, serverCount: r.data?.serverCount ?? r.data?.server_count ?? 0, pcCount: r.data?.pcCount ?? r.data?.pc_count ?? 0, networkDeviceCount: r.data?.networkDeviceCount ?? r.data?.network_device_count ?? 0, otherCount: r.data?.otherCount ?? r.data?.other_count ?? 0 };
   },
 
   "sangfor_xdr.AssetService/GetExposure": async (req, ctx) => {
@@ -174,7 +174,7 @@ const incidentHandlers = {
   },
 
   "sangfor_xdr.IncidentService/GetDisposalTabs": async (req, ctx) => {
-    const extra = req.entityType ? `&entityType=${encodeURIComponent(req.entityType)}` : "";
+    const extra = req.entityType ? `?entityType=${encodeURIComponent(req.entityType)}` : "";
     const r = await signedRequest({ config: ctx.config, secret: ctx.secret, method: "GET", path: `/api/xdr/v1/incident/${encodeURIComponent(req.uuid)}/disposalTabs${extra}` });
     return { tabs: (r.data?.tabs ?? []).map(t => ({ tabName: t.tabName ?? t.name ?? "", tabType: t.tabType ?? t.type ?? "", entities: (t.entities ?? []).map(e => ({ entityType: e.entityType ?? e.type ?? "", entityName: e.entityName ?? e.name ?? "", status: e.status ?? "" })) })) };
   },
@@ -497,15 +497,15 @@ function mapAsset(raw) {
     mac: raw.mac ?? raw.macAddr ?? "",
     hostname: raw.hostname ?? raw.computerName ?? raw.name ?? "",
     os: raw.os ?? raw.osType ?? raw.osName ?? "",
-    riskLevel: raw.riskLevel ?? raw.risk ?? raw.level ?? "",
-    groupName: raw.groupName ?? raw.group?.name ?? "",
-    branchName: raw.branchName ?? raw.branch?.name ?? "",
-    responsiblePerson: raw.responsiblePerson ?? raw.owner ?? raw.responsible ?? "",
+    riskLevel: raw.riskLevel ?? raw.risk_level ?? raw.risk ?? raw.level ?? "",
+    groupName: raw.groupName ?? raw.group_name ?? raw.group?.name ?? "",
+    branchName: raw.branchName ?? raw.branch_name ?? raw.branch?.name ?? "",
+    responsiblePerson: raw.responsiblePerson ?? raw.responsible_person ?? raw.owner ?? raw.responsible ?? "",
     department: raw.department ?? raw.dept ?? "",
     status: raw.status ?? raw.onlineStatus ?? "",
-    lastSeen: raw.lastSeen ?? raw.lastOnlineTime ?? raw.lastScanTime ?? "",
-    vulnCount: raw.vulnCount ?? raw.vuln ?? raw.vulnerabilityCount ?? 0,
-    alertCount: raw.alertCount ?? raw.alarm ?? raw.alarmCount ?? 0,
+    lastSeen: raw.lastSeen ?? raw.last_seen ?? raw.lastOnlineTime ?? raw.lastScanTime ?? "",
+    vulnCount: raw.vulnCount ?? raw.vuln_count ?? raw.vuln ?? raw.vulnerabilityCount ?? 0,
+    alertCount: raw.alertCount ?? raw.alert_count ?? raw.alarm ?? raw.alarmCount ?? 0,
   };
 }
 
@@ -516,9 +516,9 @@ function mapAssetV1(raw) {
     ip: raw.ip ?? raw.innerIp ?? "",
     hostname: raw.hostname ?? raw.name ?? "",
     os: raw.os ?? raw.osType ?? "",
-    groupName: raw.groupName ?? raw.group?.name ?? "",
-    branchName: raw.branchName ?? raw.branch?.name ?? "",
-    responsiblePerson: raw.responsiblePerson ?? raw.owner ?? "",
+    groupName: raw.groupName ?? raw.group_name ?? raw.group?.name ?? "",
+    branchName: raw.branchName ?? raw.branch_name ?? raw.branch?.name ?? "",
+    responsiblePerson: raw.responsiblePerson ?? raw.responsible_person ?? raw.owner ?? "",
     department: raw.department ?? raw.dept ?? "",
   };
 }
@@ -530,13 +530,13 @@ function mapIncident(raw) {
     severity: raw.severity ?? raw.level ?? "",
     status: raw.status ?? raw.state ?? "",
     type: raw.type ?? raw.category ?? "",
-    sourceIp: raw.sourceIp ?? raw.srcIp ?? raw.attackerIp ?? "",
-    targetIp: raw.targetIp ?? raw.dstIp ?? raw.victimIp ?? "",
-    assetName: raw.assetName ?? raw.deviceName ?? raw.host ?? "",
+    sourceIp: raw.sourceIp ?? raw.source_ip ?? raw.srcIp ?? raw.attackerIp ?? "",
+    targetIp: raw.targetIp ?? raw.target_ip ?? raw.dstIp ?? raw.victimIp ?? "",
+    assetName: raw.assetName ?? raw.asset_name ?? raw.deviceName ?? raw.host ?? "",
     description: raw.description ?? raw.desc ?? raw.detail ?? "",
-    detectTime: raw.detectTime ?? raw.occurTime ?? raw.createTime ?? "",
-    handleTime: raw.handleTime ?? raw.disposeTime ?? raw.finishTime ?? "",
-    handleResult: raw.handleResult ?? raw.result ?? "",
+    detectTime: raw.detectTime ?? raw.detect_time ?? raw.occurTime ?? raw.createTime ?? "",
+    handleTime: raw.handleTime ?? raw.handle_time ?? raw.disposeTime ?? raw.finishTime ?? "",
+    handleResult: raw.handleResult ?? raw.handle_result ?? raw.result ?? "",
     analyst: raw.analyst ?? raw.handler ?? raw.expert ?? "",
   };
 }
@@ -547,11 +547,11 @@ function mapAlert(raw) {
     name: raw.name ?? raw.title ?? raw.alertName ?? "",
     severity: raw.severity ?? raw.level ?? "",
     status: raw.status ?? raw.state ?? "",
-    sourceIp: raw.sourceIp ?? raw.srcIp ?? "",
-    targetIp: raw.targetIp ?? raw.dstIp ?? "",
-    assetName: raw.assetName ?? raw.deviceName ?? "",
+    sourceIp: raw.sourceIp ?? raw.source_ip ?? raw.srcIp ?? "",
+    targetIp: raw.targetIp ?? raw.target_ip ?? raw.dstIp ?? "",
+    assetName: raw.assetName ?? raw.asset_name ?? raw.deviceName ?? "",
     description: raw.description ?? raw.desc ?? "",
-    detectTime: raw.detectTime ?? raw.occurTime ?? raw.time ?? "",
+    detectTime: raw.detectTime ?? raw.detect_time ?? raw.occurTime ?? raw.time ?? "",
   };
 }
 
@@ -559,16 +559,16 @@ function mapVuln(raw) {
   return {
     id: raw.id ?? raw.riskId ?? raw.vulnId ?? "",
     name: raw.name ?? raw.title ?? raw.vulnName ?? "",
-    cveId: raw.cveId ?? raw.cve ?? "",
+    cveId: raw.cveId ?? raw.cve_id ?? raw.cve ?? "",
     severity: raw.severity ?? raw.level ?? "",
     status: raw.status ?? raw.state ?? "",
-    assetId: raw.assetId ?? raw.deviceId ?? raw.asset?.id ?? "",
-    assetName: raw.assetName ?? raw.deviceName ?? raw.asset?.name ?? "",
+    assetId: raw.assetId ?? raw.asset_id ?? raw.deviceId ?? raw.asset?.id ?? "",
+    assetName: raw.assetName ?? raw.asset_name ?? raw.deviceName ?? raw.asset?.name ?? "",
     description: raw.description ?? raw.desc ?? raw.detail ?? "",
     solution: raw.solution ?? raw.fix ?? raw.remediation ?? "",
-    detectTime: raw.detectTime ?? raw.findTime ?? raw.discoverTime ?? "",
-    fixTime: raw.fixTime ?? raw.repairTime ?? raw.resolveTime ?? "",
-    responsiblePerson: raw.responsiblePerson ?? raw.owner ?? raw.responsible ?? "",
+    detectTime: raw.detectTime ?? raw.detect_time ?? raw.findTime ?? raw.discoverTime ?? "",
+    fixTime: raw.fixTime ?? raw.fix_time ?? raw.repairTime ?? raw.resolveTime ?? "",
+    responsiblePerson: raw.responsiblePerson ?? raw.responsible_person ?? raw.owner ?? raw.responsible ?? "",
   };
 }
 
