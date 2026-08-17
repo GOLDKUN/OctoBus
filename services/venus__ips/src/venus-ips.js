@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer';
+
 // 启明星辰 IPS 攻击日志查询适配。
 // 认证:web 会话 Cookie。GET /log/memorylog/ipslog.php 返回 HTML 日志页，解析表行为结构化条目。
 import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
@@ -5,10 +7,19 @@ import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
 const SVC = 'VENUS_IPS.VENUS_IPS';
 export const QUERY_IPS_LOG_PATH = `/${SVC}/QueryIpsLog`;
 export const METHOD_QUERY_IPS_LOG_FULL = `${SVC}/QueryIpsLog`;
+export const PROBE_CONNECTIVITY_PATH = `/${SVC}/ProbeConnectivity`;
+export const METHOD_PROBE_CONNECTIVITY_FULL = `${SVC}/ProbeConnectivity`;
 
 export const IPS_LOG_URI = '/log/memorylog/ipslog.php';
 export const LOG_PAGE_MARKER = 'ips_log_filter';
 export const DEFAULT_TIMEOUT_MS = 5000;
+export const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+export const MAX_LIMIT = 10_000;
+
+const BLOCKED_HEADERS = new Set([
+  'authorization', 'cookie', 'host', 'connection', 'content-length', 'proxy-authorization',
+  'transfer-encoding', 'upgrade', 'x-engine-instance', 'x-request-id',
+]);
 
 // 日志表 14 个有 title 的数据单元格，按列顺序映射。
 const ENTRY_FIELDS = [
@@ -21,6 +32,7 @@ const grpcCodeFor = (code) => ({
   FAILED_PRECONDITION: grpcStatus.FAILED_PRECONDITION,
   INVALID_ARGUMENT: grpcStatus.INVALID_ARGUMENT,
   PERMISSION_DENIED: grpcStatus.PERMISSION_DENIED,
+  RESOURCE_EXHAUSTED: grpcStatus.RESOURCE_EXHAUSTED,
   UNAVAILABLE: grpcStatus.UNAVAILABLE,
   UNKNOWN: grpcStatus.UNKNOWN,
 })[code] ?? grpcStatus.UNKNOWN;
@@ -94,8 +106,15 @@ const pickFirstBoolean = (values = []) => {
 
 const normalizeBaseUrl = (value) => {
   const raw = String(unwrapScalar(value) || '').trim();
-  if (!/^https?:\/\//i.test(raw)) return '';
-  return raw.replace(/\/+$/, '');
+  try {
+    const url = new URL(raw);
+    if (!['http:', 'https:'].includes(url.protocol)
+      || url.username || url.password || url.search || url.hash
+      || (url.pathname && url.pathname !== '/')) return '';
+    return url.origin;
+  } catch {
+    return '';
+  }
 };
 
 const resolveCallContext = (ctx = {}) => ({
@@ -110,12 +129,24 @@ const resolveCallContext = (ctx = {}) => ({
   req: ctx.req ?? ctx.request ?? {},
 });
 
-const resolveHost = (bindings = {}) => normalizeBaseUrl(pickFirstString([bindings.host, bindings.restBaseUrl, bindings.baseUrl]));
+const resolveHost = (bindings = {}) => {
+  for (const candidate of [bindings.host, bindings.restBaseUrl, bindings.baseUrl]) {
+    const normalized = normalizeBaseUrl(candidate);
+    if (normalized) return normalized;
+  }
+  return '';
+};
 const resolveCookie = (bindings = {}) => pickStringFrom(bindings, ['cookie', 'sessionCookie', 'session_cookie']);
 
 const resolveTimeoutMs = (ctx = {}) => {
   const raw = Number(unwrapScalar(ctx.limits?.timeoutMs ?? ctx.bindings?.timeoutMs ?? DEFAULT_TIMEOUT_MS));
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
+};
+
+const resolveMaxResponseBytes = (ctx = {}) => {
+  const raw = Number(unwrapScalar(ctx.bindings?.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES));
+  return Number.isFinite(raw) && raw >= 1024 && raw <= 8 * 1024 * 1024
+    ? Math.trunc(raw) : DEFAULT_MAX_RESPONSE_BYTES;
 };
 
 const buildTlsOptions = (bindings = {}) => {
@@ -126,7 +157,14 @@ const buildTlsOptions = (bindings = {}) => {
 const sanitizeHeaders = (headers) => {
   const raw = unwrapScalar(headers);
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-  return Object.fromEntries(Object.entries(raw).filter(([key]) => key).map(([key, value]) => [key, String(unwrapScalar(value) ?? '')]));
+  const result = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const normalized = key.trim().toLowerCase();
+    const text = String(unwrapScalar(value) ?? '');
+    if (!normalized || BLOCKED_HEADERS.has(normalized) || /[\r\n]/.test(key) || /[\r\n]/.test(text)) continue;
+    result[key] = text;
+  }
+  return result;
 };
 
 const buildHeaders = (bindings = {}, meta = {}, cookie = '') => ({
@@ -137,10 +175,43 @@ const buildHeaders = (bindings = {}, meta = {}, cookie = '') => ({
   'x-request-id': pickFirstString([meta.request_id, meta.requestId, 'unknown']),
 });
 
-const throwForHttpStatus = (status, text) => {
-  if (status === 401 || status === 403) throw errorWithCode('PERMISSION_DENIED', `upstream http ${status}: ${text}`);
-  if (status >= 400 && status < 500) throw errorWithCode('FAILED_PRECONDITION', `upstream http ${status}: ${text}`);
-  throw errorWithCode('UNAVAILABLE', `upstream http ${status}: ${text}`);
+const throwForHttpStatus = (status) => {
+  if (status === 401 || status === 403) throw errorWithCode('PERMISSION_DENIED', `upstream rejected authentication (HTTP ${status})`);
+  if (status >= 300 && status < 400) throw errorWithCode('FAILED_PRECONDITION', 'upstream redirect refused (session may be expired)');
+  if (status >= 400 && status < 500) throw errorWithCode('FAILED_PRECONDITION', `upstream rejected request (HTTP ${status})`);
+  throw errorWithCode('UNAVAILABLE', `upstream unavailable (HTTP ${status})`);
+};
+
+const readBoundedText = async (response, maxBytes) => {
+  const declared = Number(response.headers?.get?.('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response exceeds configured limit');
+  }
+  if (response.body?.getReader) {
+    const reader = response.body.getReader();
+    const chunks = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > maxBytes) {
+          await reader.cancel?.();
+          throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response exceeds configured limit');
+        }
+        chunks.push(Buffer.from(value));
+      }
+    } finally {
+      reader.releaseLock?.();
+    }
+    return Buffer.concat(chunks).toString('utf8');
+  }
+  const text = await response.text();
+  if (Buffer.byteLength(String(text), 'utf8') > maxBytes) {
+    throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response exceeds configured limit');
+  }
+  return String(text);
 };
 
 const requireBindings = (ctx = {}) => {
@@ -150,6 +221,7 @@ const requireBindings = (ctx = {}) => {
   if (!host) throw errorWithCode('INVALID_ARGUMENT', 'bindings.host is required');
   const cookie = resolveCookie(bindings);
   if (!cookie) throw errorWithCode('INVALID_ARGUMENT', 'bindings.cookie (web session cookie) is required');
+  if (cookie.length > 8192 || /[\r\n]/.test(cookie)) throw errorWithCode('INVALID_ARGUMENT', 'bindings.cookie is invalid');
   return { ...callCtx, bindings, host, cookie };
 };
 
@@ -190,21 +262,31 @@ const parseIpsLog = (html, limit = 0) => {
 const runQueryIpsLog = async (req = {}, ctx = {}) => {
   const bound = requireBindings(ctx);
   const request = bound.req ? { ...bound.req, ...req } : req;
-  const limit = Math.max(0, pickInt(request, ['limit'], 0));
+  const rawLimit = pickInt(request, ['limit'], 0);
+  if (rawLimit < 0 || rawLimit > MAX_LIMIT) throw errorWithCode('INVALID_ARGUMENT', `limit must be between 0 and ${MAX_LIMIT}`);
+  const limit = rawLimit;
   let response;
   try {
     response = await fetch(`${bound.host}${IPS_LOG_URI}`, {
       method: 'GET',
+      redirect: 'manual',
       timeoutMs: resolveTimeoutMs(bound),
       ...buildTlsOptions(bound.bindings),
       headers: buildHeaders(bound.bindings, bound.meta, bound.cookie),
     });
   } catch (err) {
-    throw errorWithCode('UNAVAILABLE', err?.cause?.message || err?.message || 'fetch failed');
+    if (err instanceof GrpcError) throw err;
+    throw errorWithCode('UNAVAILABLE', 'upstream request failed');
   }
-  const text = await response.text();
   const status = Number(response.status);
-  if (!response.ok) throwForHttpStatus(status, text);
+  if (!response.ok) throwForHttpStatus(status);
+  let text;
+  try {
+    text = await readBoundedText(response, resolveMaxResponseBytes(bound));
+  } catch (err) {
+    if (err instanceof GrpcError) throw err;
+    throw errorWithCode('UNAVAILABLE', 'failed to read upstream response');
+  }
   // 会话失效时设备会重定向到登录页(同样 200),用日志页标记区分。
   if (!String(text || '').includes(LOG_PAGE_MARKER)) {
     throw errorWithCode('FAILED_PRECONDITION', 'unexpected response (session may be expired or not the IPS log page)');
@@ -213,15 +295,37 @@ const runQueryIpsLog = async (req = {}, ctx = {}) => {
   return { http_status: status, total: entries.length, entries };
 };
 
+const runProbeConnectivity = async (ctx = {}) => {
+  const bound = requireBindings(ctx);
+  let response;
+  try {
+    response = await fetch(`${bound.host}${IPS_LOG_URI}`, {
+      method: 'GET',
+      redirect: 'manual',
+      timeoutMs: resolveTimeoutMs(bound),
+      ...buildTlsOptions(bound.bindings),
+      headers: buildHeaders(bound.bindings, bound.meta, bound.cookie),
+    });
+  } catch {
+    throw errorWithCode('UNAVAILABLE', 'upstream request failed');
+  }
+  const status = Number(response.status);
+  if (!response.ok) throwForHttpStatus(status);
+  response.body?.cancel?.().catch?.(() => {});
+  return { reachable: true, http_status: status };
+};
+
 export function rpcdef(ctx = {}) {
   const callCtx = resolveCallContext(ctx);
   return {
+    [PROBE_CONNECTIVITY_PATH]: async () => runProbeConnectivity(callCtx),
     [QUERY_IPS_LOG_PATH]: async (req) => runQueryIpsLog(req ?? callCtx.req, callCtx),
   };
 }
 
 export const handlers = {
-  [METHOD_QUERY_IPS_LOG_FULL]: (req, ctx = {}) => runQueryIpsLog(req, ctx),
+  [METHOD_PROBE_CONNECTIVITY_FULL]: (ctx = {}) => runProbeConnectivity(ctx),
+  [METHOD_QUERY_IPS_LOG_FULL]: (ctx = {}) => runQueryIpsLog(ctx.request ?? ctx.req ?? {}, ctx),
 };
 
 export const _test = {
@@ -242,8 +346,10 @@ export const _test = {
   resolveCallContext,
   resolveCookie,
   resolveHost,
+  resolveMaxResponseBytes,
   resolveTimeoutMs,
   rowTitles,
+  readBoundedText,
   sanitizeHeaders,
   throwForHttpStatus,
   unwrapScalar,

@@ -5,6 +5,8 @@ import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
 
 import {
   QUERY_IPS_LOG_PATH,
+  PROBE_CONNECTIVITY_PATH,
+  METHOD_PROBE_CONNECTIVITY_FULL,
   METHOD_QUERY_IPS_LOG_FULL,
   IPS_LOG_URI,
   _test,
@@ -34,6 +36,7 @@ const createHeaders = (entries = {}) => {
 };
 const fakeResponse = (status, body, ok = status >= 200 && status < 300) => ({ status, ok, headers: createHeaders(), text: async () => body });
 const withFetch = (impl) => { globalThis.fetch = impl; };
+const invoke = (request, ctx) => handlers[METHOD_QUERY_IPS_LOG_FULL]({ ...ctx, request });
 
 test.afterEach(() => { globalThis.fetch = originalFetch; });
 
@@ -66,10 +69,38 @@ test('parses IPS log HTML into structured entries', async () => {
   }
 });
 
+test('connectivity probe uses the same hardened upstream request', async () => {
+  const mock = await createMockServer();
+  try {
+    const ctx = buildCtx(mock);
+    const out = await handlers[METHOD_PROBE_CONNECTIVITY_FULL](ctx);
+    assert.deepEqual(out, { reachable: true, http_status: 200 });
+    assert.equal(mock.state.requests[0].cookie, mock.cookie);
+    const viaRpcdef = await rpcdef(ctx)[PROBE_CONNECTIVITY_PATH]();
+    assert.equal(viaRpcdef.reachable, true);
+  } finally {
+    await mock.close();
+  }
+});
+
+test('connectivity probe maps network and HTTP failures without leaking details', async () => {
+  const ctx = buildCtx({ host: 'https://ips', cookie: 'c=1' });
+  withFetch(async () => { throw new Error('secret network detail'); });
+  await assert.rejects(
+    () => handlers[METHOD_PROBE_CONNECTIVITY_FULL](ctx),
+    (e) => e.legacyCode === 'UNAVAILABLE' && !e.message.includes('secret'),
+  );
+  withFetch(async () => fakeResponse(401, 'secret response', false));
+  await assert.rejects(
+    () => handlers[METHOD_PROBE_CONNECTIVITY_FULL](ctx),
+    (e) => e.legacyCode === 'PERMISSION_DENIED' && !e.message.includes('secret'),
+  );
+});
+
 test('limit caps the number of returned entries', async () => {
   const mock = await createMockServer();
   try {
-    const out = await handlers[METHOD_QUERY_IPS_LOG_FULL]({ limit: 1 }, buildCtx(mock));
+    const out = await invoke({ limit: 1 }, buildCtx(mock));
     assert.equal(out.total, 1);
     assert.equal(out.entries.length, 1);
   } finally {
@@ -81,7 +112,7 @@ test('expired session (login page, no marker) -> FAILED_PRECONDITION', async () 
   const mock = await createMockServer();
   try {
     await assert.rejects(
-      () => handlers[METHOD_QUERY_IPS_LOG_FULL]({}, buildCtx(mock, { bindings: { cookie: 'PHPSESSID=wrong' } })),
+      () => invoke({}, buildCtx(mock, { bindings: { cookie: 'PHPSESSID=wrong' } })),
       (e) => e.legacyCode === 'FAILED_PRECONDITION',
     );
   } finally {
@@ -92,8 +123,11 @@ test('expired session (login page, no marker) -> FAILED_PRECONDITION', async () 
 // ---------- validation ----------
 
 test('binding validation', async () => {
-  await assert.rejects(() => handlers[METHOD_QUERY_IPS_LOG_FULL]({}, buildCtx({ host: '' })), (e) => e.legacyCode === 'INVALID_ARGUMENT');
-  await assert.rejects(() => handlers[METHOD_QUERY_IPS_LOG_FULL]({}, buildCtx({ host: 'https://h', cookie: '' })), (e) => e.legacyCode === 'INVALID_ARGUMENT');
+  await assert.rejects(() => invoke({}, buildCtx({ host: '' })), (e) => e.legacyCode === 'INVALID_ARGUMENT');
+  await assert.rejects(() => invoke({}, buildCtx({ host: 'https://h', cookie: '' })), (e) => e.legacyCode === 'INVALID_ARGUMENT');
+  await assert.rejects(() => invoke({ limit: -1 }, buildCtx({ host: 'https://h', cookie: 'c' })), (e) => e.legacyCode === 'INVALID_ARGUMENT');
+  await assert.rejects(() => invoke({ limit: 10_001 }, buildCtx({ host: 'https://h', cookie: 'c' })), (e) => e.legacyCode === 'INVALID_ARGUMENT');
+  await assert.rejects(() => invoke({}, buildCtx({ host: 'https://h', cookie: 'bad\r\nx: y' })), (e) => e.legacyCode === 'INVALID_ARGUMENT');
 });
 
 // ---------- error mapping ----------
@@ -101,41 +135,75 @@ test('binding validation', async () => {
 test('error mapping: network / http', async () => {
   const ctx = buildCtx({ host: 'https://ips', cookie: 'c=1' });
   withFetch(async () => { throw new Error('ECONNREFUSED'); });
-  await assert.rejects(() => handlers[METHOD_QUERY_IPS_LOG_FULL]({}, ctx), (e) => e.legacyCode === 'UNAVAILABLE');
+  await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'UNAVAILABLE' && !e.message.includes('ECONNREFUSED'));
   withFetch(async () => fakeResponse(401, 'no', false));
-  await assert.rejects(() => handlers[METHOD_QUERY_IPS_LOG_FULL]({}, ctx), (e) => e.legacyCode === 'PERMISSION_DENIED');
+  await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'PERMISSION_DENIED' && !e.message.includes('no'));
   withFetch(async () => fakeResponse(404, 'no', false));
-  await assert.rejects(() => handlers[METHOD_QUERY_IPS_LOG_FULL]({}, ctx), (e) => e.legacyCode === 'FAILED_PRECONDITION');
+  await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'FAILED_PRECONDITION');
   withFetch(async () => fakeResponse(500, 'no', false));
-  await assert.rejects(() => handlers[METHOD_QUERY_IPS_LOG_FULL]({}, ctx), (e) => e.legacyCode === 'UNAVAILABLE');
+  await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'UNAVAILABLE');
+  withFetch(async () => fakeResponse(302, 'location secret', false));
+  await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'FAILED_PRECONDITION' && !e.message.includes('secret'));
 });
 
-test('fetch error fallback message', async () => {
+test('fetch errors are redacted', async () => {
   const ctx = buildCtx({ host: 'https://ips', cookie: 'c=1' });
-  withFetch(async () => { throw {}; });
-  await assert.rejects(() => handlers[METHOD_QUERY_IPS_LOG_FULL]({}, ctx), (e) => /fetch failed/.test(e.message));
-  withFetch(async () => { const e = new Error('m'); e.cause = { message: 'deep' }; throw e; });
-  await assert.rejects(() => handlers[METHOD_QUERY_IPS_LOG_FULL]({}, ctx), (e) => /deep/.test(e.message));
+  withFetch(async () => { throw new Error('https://ips/?cookie=secret'); });
+  await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'UNAVAILABLE' && !e.message.includes('secret'));
 });
 
 test('valid log page with zero data rows returns empty entries', async () => {
   const ctx = buildCtx({ host: 'https://ips', cookie: 'c=1' });
   withFetch(async () => fakeResponse(200, '<html><input name="module" value="ips_log_filter"><table><tr><th>名称</th></tr></table></html>'));
-  const out = await handlers[METHOD_QUERY_IPS_LOG_FULL]({}, ctx);
+  const out = await invoke({}, ctx);
   assert.equal(out.total, 0);
   assert.deepEqual(out.entries, []);
+});
+
+test('response size and read failures are bounded and redacted', async () => {
+  const ctx = buildCtx({ host: 'https://ips', cookie: 'c=1' }, { bindings: { maxResponseBytes: 1024 } });
+  withFetch(async () => ({ status: 200, ok: true, headers: createHeaders({ 'content-length': '2048' }), text: async () => 'not read' }));
+  await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'RESOURCE_EXHAUSTED');
+
+  withFetch(async (_url, options) => {
+    assert.equal(options.redirect, 'manual');
+    return fakeResponse(200, 'x'.repeat(1025));
+  });
+  await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'RESOURCE_EXHAUSTED');
+
+  withFetch(async () => ({
+    status: 200, ok: true, headers: createHeaders(),
+    text: async () => { throw new Error('secret response failure'); },
+  }));
+  await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'UNAVAILABLE' && !e.message.includes('secret'));
+
+  let cancelled = false;
+  const values = [new Uint8Array(700), new Uint8Array(700)];
+  withFetch(async () => ({
+    status: 200, ok: true, headers: createHeaders(),
+    body: { getReader: () => ({
+      read: async () => (values.length ? { done: false, value: values.shift() } : { done: true }),
+      cancel: async () => { cancelled = true; },
+      releaseLock: () => {},
+    }) },
+  }));
+  await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'RESOURCE_EXHAUSTED');
+  assert.equal(cancelled, true);
 });
 
 // ---------- service surface + helpers ----------
 
 test('service exposes the QueryIpsLog handler', () => {
   assert.equal(typeof service.handlers[METHOD_QUERY_IPS_LOG_FULL], 'function');
+  assert.equal(typeof service.handlers[METHOD_PROBE_CONNECTIVITY_FULL], 'function');
 });
 
 test('helper coverage', () => {
   const h = _test;
   assert.equal(h.normalizeBaseUrl('https://h/'), 'https://h');
   assert.equal(h.normalizeBaseUrl('ftp://x'), '');
+  assert.equal(h.normalizeBaseUrl('https://user:pass@h'), '');
+  assert.equal(h.normalizeBaseUrl('https://h/path'), '');
   assert.equal(h.resolveCookie({ session_cookie: 'c' }), 'c');
   assert.equal(h.resolveCookie({ sessionCookie: 'c2' }), 'c2');
   assert.equal(h.decodeEntities('a&amp;b&lt;c&gt;&quot;&#39;&nbsp;d'), 'a&b<c>"\' d');
@@ -165,17 +233,19 @@ test('helper coverage', () => {
   assert.equal(h.pickBoolean('maybe'), undefined);
   assert.equal(h.pickFirstBoolean(['x', 'true']), true);
   assert.equal(h.unwrapScalar({ value: { value: 2 } }), 2);
-  assert.deepEqual(h.sanitizeHeaders({ A: 1, '': 2 }), { A: '1' });
+  assert.deepEqual(h.sanitizeHeaders({ A: 1, '': 2, Cookie: 'bad', 'X-B': 'bad\r\nx: y' }), { A: '1' });
   assert.deepEqual(h.sanitizeHeaders('x'), {});
   assert.equal(h.buildTlsOptions({ skipTlsVerify: true }).skipTlsVerify, true);
   assert.deepEqual(h.buildTlsOptions({}), {});
   assert.equal(h.resolveTimeoutMs({ limits: { timeoutMs: 0 } }), 5000);
   assert.equal(h.resolveTimeoutMs({ limits: { timeoutMs: 321 } }), 321);
+  assert.equal(h.resolveMaxResponseBytes({ bindings: { maxResponseBytes: 2048 } }), 2048);
+  assert.equal(h.resolveMaxResponseBytes({ bindings: { maxResponseBytes: 1 } }), 2 * 1024 * 1024);
   assert.equal(h.grpcCodeFor('NOPE'), grpcStatus.UNKNOWN);
   assert.ok(h.errorWithCode('UNAVAILABLE', 'x') instanceof GrpcError);
-  assert.throws(() => h.throwForHttpStatus(403, 'x'), (e) => e.legacyCode === 'PERMISSION_DENIED');
-  assert.throws(() => h.throwForHttpStatus(400, 'x'), (e) => e.legacyCode === 'FAILED_PRECONDITION');
-  assert.throws(() => h.throwForHttpStatus(500, 'x'), (e) => e.legacyCode === 'UNAVAILABLE');
+  assert.throws(() => h.throwForHttpStatus(403), (e) => e.legacyCode === 'PERMISSION_DENIED');
+  assert.throws(() => h.throwForHttpStatus(400), (e) => e.legacyCode === 'FAILED_PRECONDITION');
+  assert.throws(() => h.throwForHttpStatus(500), (e) => e.legacyCode === 'UNAVAILABLE');
   const hdr = h.buildHeaders({ headers: { 'X-A': '1' } }, { instance_id: 'i', request_id: 'r' }, 'c=1');
   assert.equal(hdr.cookie, 'c=1');
   assert.equal(hdr['X-A'], '1');

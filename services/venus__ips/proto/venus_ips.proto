@@ -8,8 +8,17 @@ option go_package = "miner/grpc-service/VENUS_IPS";
 // 认证为 web 会话 Cookie:GET /log/memorylog/ipslog.php，浏览器 credentials=include。
 // 设备返回 HTML 日志页,本 service 解析其中的日志表行,映射为结构化条目。
 service VENUS_IPS {
+  // 探测控制台 HTTP 可达性；不读取或返回响应正文，也不代表会话一定有效。
+  rpc ProbeConnectivity(ProbeConnectivityRequest) returns (ProbeConnectivityResponse) {}
   // 查询 IPS 攻击日志(内存日志): GET /log/memorylog/ipslog.php
   rpc QueryIpsLog(QueryIpsLogRequest) returns (QueryIpsLogResponse) {}
+}
+
+message ProbeConnectivityRequest {}
+
+message ProbeConnectivityResponse {
+  bool reachable = 1;
+  int32 http_status = 2;
 }
 
 message QueryIpsLogRequest {
