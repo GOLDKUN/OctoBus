@@ -1,0 +1,12 @@
+{
+  "method": "Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetStatus",
+  "request": {},
+  "protocols": ["connect", "grpc", "mcp"],
+  "expectUpstream": true,
+  "requireBusinessSuccess": true,
+  "requireUpstreamPerProtocol": true,
+  "upstream": {
+    "method": "GET",
+    "path": "/api/status"
+  }
+}

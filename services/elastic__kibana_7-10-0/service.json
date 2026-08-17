@@ -1,0 +1,53 @@
+{
+  "schema": "chaitin.octobus.service.v1",
+  "name": "kibana-7-10-0",
+  "displayName": "Elastic Kibana 7.10.0",
+  "description": "OctoBus package for Elastic Kibana 7.10.0 read-only operations (status, spaces, saved objects, export).",
+  "runtime": {
+    "mode": "long-running"
+  },
+  "proto": {
+    "roots": [
+      "proto"
+    ],
+    "files": [
+      "proto/kibana_7_10_0.proto"
+    ]
+  },
+  "configSchema": "config.schema.json",
+  "secretSchema": "secret.schema.json",
+  "sdk": {
+    "cli": {
+      "commands": {
+        "Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetStatus": {
+          "name": "get-status",
+          "description": "Get Kibana server status."
+        },
+        "Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/ListSpaces": {
+          "name": "list-spaces",
+          "description": "List Kibana spaces."
+        },
+        "Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetSpace": {
+          "name": "get-space",
+          "description": "Get a single Kibana space by ID."
+        },
+        "Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/FindSavedObjects": {
+          "name": "find-saved-objects",
+          "description": "Find Kibana saved objects by type and search criteria."
+        },
+        "Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetSavedObject": {
+          "name": "get-saved-object",
+          "description": "Get a single Kibana saved object by type and id."
+        },
+        "Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/BulkGetSavedObjects": {
+          "name": "bulk-get-saved-objects",
+          "description": "Bulk get multiple Kibana saved objects by type and id."
+        },
+        "Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/ExportSavedObjects": {
+          "name": "export-saved-objects",
+          "description": "Export Kibana saved objects as NDJSON."
+        }
+      }
+    }
+  }
+}

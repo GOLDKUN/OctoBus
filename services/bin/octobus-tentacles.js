@@ -133,6 +133,10 @@ const services = {
     entryFile: "../chaitin__dsensor_ds-s_h_40-25.07.001/bin/dsensor.js",
     serviceModule: "../chaitin__dsensor_ds-s_h_40-25.07.001/src/service.js",
   },
+  "kibana-7-10-0": {
+    entryFile: "../elastic__kibana_7-10-0/bin/kibana-7-10-0.js",
+    serviceModule: "../elastic__kibana_7-10-0/src/service.js",
+  },
   "alertmanager-0-27-0": {
     entryFile: "../prometheus__alertmanager_0-27-0/bin/alertmanager-0-27-0.js",
     serviceModule: "../prometheus__alertmanager_0-27-0/src/service.js",

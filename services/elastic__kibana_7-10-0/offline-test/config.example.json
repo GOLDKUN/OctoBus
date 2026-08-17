@@ -1,0 +1,10 @@
+{
+  "config": {
+    "baseUrl": "https://kibana.example.com:5601",
+    "timeoutMs": 5000
+  },
+  "secret": {
+    "username": "KIBANA_USERNAME",
+    "password": "KIBANA_PASSWORD"
+  }
+}
