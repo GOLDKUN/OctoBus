@@ -63,7 +63,7 @@
 
 - `BlockIPRequest.items[]`：`ip_start`（必填）、`ip_end`（缺省=ip_start）、`enable`（默认 `enable`）、`desc`、`schedule`。
 - `UnblockIPRequest.targets[]`：`ip_start`（必填）、`ip_end`（缺省=ip_start）。
-- `BlockIP/UnblockIP` 返回 `results[]`，与请求条目一一对应，含 `error_code`（设备 `head.error_code`，0=成功）、`error_string`、`http_status` 与 `raw_json` 透传。
+- `BlockIP/UnblockIP` 返回 `results[]`，与请求条目一一对应，含 `error_code`（设备 `head.error_code`，0=成功；非数字设备错误码或单条传输失败为 -1）、`error_string`、`http_status` 与 `raw_json` 透传。单条传输失败时 `http_status` 为 0，其他条目仍继续下发。
 - `QueryBlacklistResponse`：`error_code`、`total`、`data`（黑名单明细透传）、`raw_json`。
 
 ## 风险边界

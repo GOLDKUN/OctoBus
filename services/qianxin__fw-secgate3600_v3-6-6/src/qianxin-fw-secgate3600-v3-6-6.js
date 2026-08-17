@@ -163,14 +163,17 @@ const buildHeaders = (ctx, extra = {}) => {
 };
 
 const getInstanceKey = (ctx) => String(ctx?.meta?.instance_id || ctx?.meta?.instanceId || 'default');
-const getSessionKey = (ctx, host, username = '') => `${getInstanceKey(ctx)}:${host}:${username}`;
+// An OctoBus instance owns one configured device session. Keying by username made
+// LoginRequest.username sessions unreachable from the other RPCs, whose request
+// messages intentionally do not carry a username.
+const getSessionKey = (ctx, host) => `${getInstanceKey(ctx)}:${host}`;
 const pruneSessions = (now = Date.now()) => {
   for (const [key, session] of sessionCache) if (!session?.expiresAt || session.expiresAt <= now) sessionCache.delete(key);
   while (sessionCache.size > MAX_SESSION_ENTRIES) sessionCache.delete(sessionCache.keys().next().value);
 };
-const getSession = (ctx, host, username = toTrimmedString(firstDefined(ctx?.bindings?.user, ctx?.bindings?.username))) => {
+const getSession = (ctx, host) => {
   pruneSessions();
-  const key = getSessionKey(ctx, host, username);
+  const key = getSessionKey(ctx, host);
   const session = sessionCache.get(key);
   if (session) { sessionCache.delete(key); sessionCache.set(key, session); }
   return session;
@@ -178,16 +181,15 @@ const getSession = (ctx, host, username = toTrimmedString(firstDefined(ctx?.bind
 const setSession = (ctx, host, session) => {
   pruneSessions();
   const username = session.username || toTrimmedString(firstDefined(ctx?.bindings?.user, ctx?.bindings?.username));
-  const key = getSessionKey(ctx, host, username);
+  const key = getSessionKey(ctx, host);
   sessionCache.delete(key);
   sessionCache.set(key, { ...session, username, expiresAt: Date.now() + SESSION_TTL_MS });
   pruneSessions();
 };
-const clearSession = (ctx, host, username = toTrimmedString(firstDefined(ctx?.bindings?.user, ctx?.bindings?.username))) => sessionCache.delete(getSessionKey(ctx, host, username));
+const clearSession = (ctx, host) => sessionCache.delete(getSessionKey(ctx, host));
 
 const requireSession = (ctx, host) => {
-  const username = requireString(firstDefined(ctx?.bindings?.user, ctx?.bindings?.username), 'username');
-  const session = getSession(ctx, host, username);
+  const session = getSession(ctx, host);
   if (!session?.cookie || !session?.token) throw errorWithCode('FAILED_PRECONDITION', 'call Login first');
   return session;
 };
@@ -198,6 +200,22 @@ const toInt64 = (value, fallback = 0) => {
   const num = Number(raw);
   if (!Number.isFinite(num)) return fallback;
   return Math.trunc(num);
+};
+
+const deviceErrorCode = (value) => {
+  const raw = unwrapScalar(value);
+  if (raw === undefined || raw === null || raw === '') return -1;
+  const num = Number(raw);
+  return Number.isFinite(num) ? Math.trunc(num) : -1;
+};
+
+const deviceErrorString = (head = {}) => {
+  const message = toTrimmedString(firstDefined(head.error_string, head.message));
+  if (message) return message;
+  const rawCode = unwrapScalar(head.error_code);
+  return deviceErrorCode(rawCode) === -1 && rawCode !== undefined && rawCode !== null
+    ? `device error_code: ${sanitizeText(rawCode)}`
+    : '';
 };
 
 const toValue = (val) => {
@@ -297,7 +315,7 @@ const firstEnvelope = (json) => {
 
 const throwForAuthStatus = (ctx, host, status) => {
   if (status === 401 || status === 403) {
-    clearSession(ctx, host, toTrimmedString(firstDefined(ctx?.bindings?.user, ctx?.bindings?.username)));
+    clearSession(ctx, host);
     throw errorWithCode('PERMISSION_DENIED', `upstream http ${status}`);
   }
 };
@@ -440,17 +458,27 @@ const handleBlockIP = async (req, ctx) => {
   const results = [];
   // 设备不支持批量下发，逐条提交。
   for (const item of items) {
-    const { upstream, json, head } = await sendRestEnvelope(callCtx, host, session, ADD_FUNCTION, {
-      addr_blacklist_cp: { blacklist_cp: [item] },
-    });
-    results.push({
-      ip_start: item.ip_start,
-      ip_end: item.ip_end,
-      error_code: toInt64(head.error_code, 0),
-      error_string: toTrimmedString(firstDefined(head.error_string, head.message)),
-      http_status: Number(upstream.status),
-      raw_json: toValue(redactValue(json)),
-    });
+    try {
+      const { upstream, json, head } = await sendRestEnvelope(callCtx, host, session, ADD_FUNCTION, {
+        addr_blacklist_cp: { blacklist_cp: [item] },
+      });
+      results.push({
+        ip_start: item.ip_start,
+        ip_end: item.ip_end,
+        error_code: deviceErrorCode(head.error_code),
+        error_string: deviceErrorString(head),
+        http_status: Number(upstream.status),
+        raw_json: toValue(redactValue(json)),
+      });
+    } catch (err) {
+      results.push({
+        ip_start: item.ip_start,
+        ip_end: item.ip_end,
+        error_code: -1,
+        error_string: sanitizeText(err?.message || 'upstream operation failed'),
+        http_status: 0,
+      });
+    }
   }
   return { results };
 };
@@ -463,17 +491,27 @@ const handleUnblockIP = async (req, ctx) => {
   const session = requireSession(callCtx, host);
   const results = [];
   for (const target of targets) {
-    const { upstream, json, head } = await sendRestEnvelope(callCtx, host, session, DEL_FUNCTION, {
-      addr_blacklist_cp: { blacklist_cp: [target] },
-    });
-    results.push({
-      ip_start: target.ip_start,
-      ip_end: target.ip_end,
-      error_code: toInt64(head.error_code, 0),
-      error_string: toTrimmedString(firstDefined(head.error_string, head.message)),
-      http_status: Number(upstream.status),
-      raw_json: toValue(redactValue(json)),
-    });
+    try {
+      const { upstream, json, head } = await sendRestEnvelope(callCtx, host, session, DEL_FUNCTION, {
+        addr_blacklist_cp: { blacklist_cp: [target] },
+      });
+      results.push({
+        ip_start: target.ip_start,
+        ip_end: target.ip_end,
+        error_code: deviceErrorCode(head.error_code),
+        error_string: deviceErrorString(head),
+        http_status: Number(upstream.status),
+        raw_json: toValue(redactValue(json)),
+      });
+    } catch (err) {
+      results.push({
+        ip_start: target.ip_start,
+        ip_end: target.ip_end,
+        error_code: -1,
+        error_string: sanitizeText(err?.message || 'upstream operation failed'),
+        http_status: 0,
+      });
+    }
   }
   return { results };
 };
@@ -488,8 +526,8 @@ const handleQueryBlacklist = async (req, ctx) => {
   const { upstream, json, head } = await sendRestEnvelope(callCtx, host, session, GET_FUNCTION, body);
   const envelope = firstEnvelope(json);
   return {
-    error_code: toInt64(head.error_code, 0),
-    error_string: toTrimmedString(firstDefined(head.error_string, head.message)),
+    error_code: deviceErrorCode(head.error_code),
+    error_string: deviceErrorString(head),
     total: toInt64(head.total, 0),
     data: toValue(redactValue(envelope.data)),
     http_status: Number(upstream.status),
@@ -547,6 +585,8 @@ export const _test = {
   buildHeaders,
   buildTlsOptions,
   clearSession,
+  deviceErrorCode,
+  deviceErrorString,
   errorWithCode,
   extractHeaders,
   fetchUpstream,

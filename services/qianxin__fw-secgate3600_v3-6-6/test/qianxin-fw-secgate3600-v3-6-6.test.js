@@ -190,6 +190,46 @@ test('login caches session from set-cookie array and reuses for block', async ()
   assert.ok(calls >= 2);
 });
 
+test('request username login remains usable by RPCs without username fields', async () => {
+  const mock = await createMockServer();
+  try {
+    const ctx = buildCtx({ host: mock.host, bindings: { user: '', username: '' } });
+    const login = await invoke(METHOD_LOGIN_FULL, ctx, { username: 'api_user', password: 'SuperSecret!' });
+    assert.equal(login.success, true);
+    const block = await invoke(METHOD_BLOCK_FULL, ctx, { items: [{ ip_start: '5.5.5.6' }] });
+    assert.equal(block.results[0].error_code, 0);
+  } finally {
+    await mock.close();
+  }
+});
+
+test('batch mutations retain a result for each item after an upstream failure', async () => {
+  const ctx = buildCtx({ host: 'https://fw:8443' });
+  primeSession(ctx);
+  let calls = 0;
+  withFetch(async () => {
+    calls += 1;
+    if (calls === 2) throw new Error('connection reset token=secret');
+    return fakeResponse(200, JSON.stringify({ head: { error_code: 0 } }));
+  });
+  const block = await invoke(METHOD_BLOCK_FULL, ctx, { items: [
+    { ip_start: '5.5.5.1' },
+    { ip_start: '5.5.5.2' },
+    { ip_start: '5.5.5.3' },
+  ] });
+  assert.deepEqual(block.results.map((result) => result.error_code), [0, -1, 0]);
+  assert.match(block.results[1].error_string, /token=REDACTED/);
+});
+
+test('non-numeric device error codes are never reported as success', async () => {
+  const ctx = buildCtx({ host: 'https://fw:8443' });
+  primeSession(ctx);
+  withFetch(async () => fakeResponse(200, JSON.stringify({ head: { error_code: 'failed' } })));
+  const block = await invoke(METHOD_BLOCK_FULL, ctx, { items: [{ ip_start: '5.5.5.7' }] });
+  assert.equal(block.results[0].error_code, -1);
+  assert.equal(block.results[0].error_string, 'device error_code: failed');
+});
+
 // ---------- service + handler surface ----------
 
 test('service defines all five handlers', () => {
@@ -290,8 +330,9 @@ test('403 from rest also clears session and maps to PERMISSION_DENIED', async ()
   const ctx = buildCtx({ host: 'https://fw:8443' });
   const host = primeSession(ctx);
   withFetch(async () => fakeResponse(403, JSON.stringify({ head: { error_code: 1 } })));
-  await assert.rejects(() => rpcdef(ctx)[UNBLOCK_PATH]({ targets: [{ ip_start: '1.1.1.1' }] }),
-    (e) => e.legacyCode === 'PERMISSION_DENIED');
+  const response = await rpcdef(ctx)[UNBLOCK_PATH]({ targets: [{ ip_start: '1.1.1.1' }] });
+  assert.equal(response.results[0].error_code, -1);
+  assert.match(response.results[0].error_string, /PERMISSION_DENIED/);
   assert.equal(_test.getSession(ctx, host), undefined);
 });
 
@@ -359,7 +400,7 @@ test('upstream responses missing result/head are tolerated', async () => {
   primeSession(ctx);
   withFetch(async () => fakeResponse(200, JSON.stringify({ data: [] })));
   const q = await invoke(METHOD_QUERY_FULL, ctx);
-  assert.equal(q.error_code, 0);
+  assert.equal(q.error_code, -1);
   assert.equal(q.total, 0);
 });
 
