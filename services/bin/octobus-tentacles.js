@@ -273,6 +273,10 @@ const services = {
     entryFile: "../qianxin__hunter_v23-1/bin/qianxin-hunter.js",
     serviceModule: "../qianxin__hunter_v23-1/src/service.js",
   },
+  "qianxin-hunter-public": {
+    entryFile: "../qianxin__hunter_public/bin/qianxin-hunter-public.js",
+    serviceModule: "../qianxin__hunter_public/src/service.js",
+  },
   "qianxin-vs-secvss3600": {
     entryFile: "../qianxin__vs-secvss3600/bin/qianxin-vs-secvss3600.js",
     serviceModule: "../qianxin__vs-secvss3600/src/service.js",

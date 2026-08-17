@@ -1,0 +1,12 @@
+{
+  "method": "hunter.v1.HunterService/GetUserInfo",
+  "request": {},
+  "expectUpstream": true,
+  "requireBusinessSuccess": true,
+  "requireUpstreamPerProtocol": true,
+  "protocols": ["connect", "grpc", "mcp"],
+  "upstream": {
+    "method": "GET",
+    "path": "/userInfo?api-key=smoke-secret"
+  }
+}

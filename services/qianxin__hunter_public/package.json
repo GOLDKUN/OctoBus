@@ -1,0 +1,12 @@
+{
+  "name": "qianxin-hunter-public",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "qianxin-hunter-public": "bin/qianxin-hunter-public.js"
+  },
+  "dependencies": {
+    "@chaitin-ai/octobus-sdk": "^0.6.0"
+  }
+}

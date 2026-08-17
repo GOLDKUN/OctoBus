@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "api_base": {
+      "type": "string",
+      "format": "uri",
+      "description": "Hunter OpenAPI base URL. Defaults to https://hunter.qianxin.com/openApi when omitted."
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1000,
+      "default": 15000,
+      "description": "Per upstream request timeout in milliseconds."
+    },
+    "skip_tls_verify": {
+      "type": "boolean",
+      "default": false,
+      "description": "Disable TLS certificate verification for a private test endpoint."
+    }
+  }
+}

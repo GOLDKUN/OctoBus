@@ -1,0 +1,33 @@
+{
+  "schema": "chaitin.octobus.service.v1",
+  "name": "qianxin-hunter-public",
+  "displayName": "QiAnXin Hunter Public API",
+  "description": "Read-only QiAnXin Hunter API service for account, asset search, and batch search.",
+  "runtime": {
+    "mode": "long-running"
+  },
+  "proto": {
+    "roots": ["proto"],
+    "files": ["proto/hunter.proto"]
+  },
+  "configSchema": "config.schema.json",
+  "secretSchema": "secret.schema.json",
+  "sdk": {
+    "cli": {
+      "commands": {
+        "hunter.v1.HunterService/GetUserInfo": {
+          "name": "get-user-info",
+          "description": "Get the Hunter account quota information."
+        },
+        "hunter.v1.HunterService/Search": {
+          "name": "search",
+          "description": "Search Hunter network-space assets."
+        },
+        "hunter.v1.HunterService/BatchSearch": {
+          "name": "batch-search",
+          "description": "Submit a Hunter batch search."
+        }
+      }
+    }
+  }
+}
