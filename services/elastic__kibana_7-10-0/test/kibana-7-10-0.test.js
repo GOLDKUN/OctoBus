@@ -275,10 +275,6 @@ test('base URLs with credentials, queries, or fragments are rejected and log URL
   assert.equal(_test.resolveTimeoutMs({ bindings: { timeoutMs: 0 } }), 5000);
   assert.equal(_test.resolveMaxResponseBytes({ bindings: { maxResponseBytes: -1 } }), 4 * 1024 * 1024);
   assert.equal(_test.resolveMaxResponseBytes({ bindings: { maxResponseBytes: 99 * 1024 * 1024 } }), 16 * 1024 * 1024);
-  assert.equal(_test.shouldSkipTlsVerify({ skipTlsVerify: 'false', insecureSkipVerify: true }), true);
-  assert.equal(_test.shouldSkipTlsVerify({ skipTlsVerify: false, tlsInsecureSkipVerify: false, insecureSkipVerify: 'off' }), false);
-  assert.equal(_test.shouldSkipTlsVerify({ tlsInsecureSkipVerify: true }), true);
-  assert.equal(_test.shouldSkipTlsVerify({ insecureSkipVerify: 'on' }), true);
   assert.deepEqual(await _test.buildTlsOptions({ skipTlsVerify: false }), {});
   assert.equal(_test.isRuntimeContext({}), false);
   assert.equal(_test.isRuntimeContext({ config: {} }), true);
@@ -288,6 +284,13 @@ test('base URLs with credentials, queries, or fragments are rejected and log URL
   assert.equal(_test.isRuntimeContext({ req: {} }), true);
   const circular = {}; circular.self = circular;
   assert.equal(_test.toJsonString(circular), '');
+});
+
+test('TLS skip aliases are equivalent and any true value wins conflicts', () => {
+  assert.equal(_test.shouldSkipTlsVerify({ skipTlsVerify: 'false', insecureSkipVerify: true }), true);
+  assert.equal(_test.shouldSkipTlsVerify({ skipTlsVerify: false, tlsInsecureSkipVerify: false, insecureSkipVerify: 'off' }), false);
+  assert.equal(_test.shouldSkipTlsVerify({ tlsInsecureSkipVerify: true }), true);
+  assert.equal(_test.shouldSkipTlsVerify({ insecureSkipVerify: 'on' }), true);
 });
 
 test('JSON parse and body readers cover empty, malformed, declared, and fallback responses', async () => {

@@ -20,7 +20,15 @@ OctoBus service package for Kibana 7.10.0 read-only operations via the Kibana RE
 |-------|------|----------|-------------|
 | `baseUrl` | string | Yes | Kibana base URL (e.g. `https://kibana.example.com:5601`) |
 | `timeoutMs` | integer | No | HTTP timeout in milliseconds (default: 5000) |
-| `skipTlsVerify` | boolean | No | Skip TLS certificate verification |
+| `skipTlsVerify` | boolean | No | Skip TLS certificate verification; strict alias of the two fields below |
+| `tlsInsecureSkipVerify` | boolean | No | Strict alias of `skipTlsVerify` |
+| `insecureSkipVerify` | boolean | No | Strict alias of `skipTlsVerify` |
+
+The three TLS-skip fields are equivalent and use any-true semantics: if any
+one is `true`, certificate verification is skipped. A `false` value cannot
+override a different alias set to `true`. Avoid conflicting values and leave
+all three `false` unless an explicitly trusted private deployment requires
+self-signed certificate support.
 
 ## Secrets
 

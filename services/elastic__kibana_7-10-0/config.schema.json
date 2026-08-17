@@ -28,17 +28,17 @@
     "skipTlsVerify": {
       "type": "boolean",
       "default": false,
-      "description": "Skip TLS certificate verification for private deployments."
+      "description": "Skip TLS certificate verification. Strictly equivalent to tlsInsecureSkipVerify and insecureSkipVerify: if any alias is true, verification is skipped; false does not override another true alias."
     },
     "tlsInsecureSkipVerify": {
       "type": "boolean",
       "default": false,
-      "description": "Alias for skipTlsVerify."
+      "description": "Strict alias for skipTlsVerify. If any TLS-skip alias is true, verification is skipped; false does not override another true alias."
     },
     "insecureSkipVerify": {
       "type": "boolean",
       "default": false,
-      "description": "Alias for skipTlsVerify."
+      "description": "Strict alias for skipTlsVerify. If any TLS-skip alias is true, verification is skipped; false does not override another true alias."
     }
   }
 }
