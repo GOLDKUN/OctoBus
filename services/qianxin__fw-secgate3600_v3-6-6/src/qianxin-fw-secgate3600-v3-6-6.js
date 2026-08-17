@@ -71,6 +71,14 @@ const requireString = (value, fieldName) => {
   return text;
 };
 
+const requireFirstString = (values, fieldName) => {
+  for (const value of values) {
+    const text = toTrimmedString(value);
+    if (text) return text;
+  }
+  throw errorWithCode('INVALID_ARGUMENT', `${fieldName} is required`);
+};
+
 const mergedBindings = (ctx = {}) => ({
   ...(ctx?.config ?? {}),
   ...(ctx?.secret ?? {}),
@@ -99,16 +107,19 @@ const normalizeBaseUrl = (value) => {
 };
 
 const requireHost = (req, ctx) => {
-  const host = normalizeBaseUrl(firstDefined(
+  const candidates = [
     req?.host,
-    ctx?.bindings?.host,
     ctx?.bindings?.restBaseUrl,
     ctx?.bindings?.baseUrl,
     ctx?.bindings?.rest_base_url,
     ctx?.bindings?.base_url,
-  ));
-  if (!host) throw errorWithCode('INVALID_ARGUMENT', 'host is required');
-  return host;
+    ctx?.bindings?.host,
+  ];
+  for (const candidate of candidates) {
+    const host = normalizeBaseUrl(candidate);
+    if (host) return host;
+  }
+  throw errorWithCode('INVALID_ARGUMENT', 'host is required');
 };
 
 const resolveTimeoutMs = (ctx) => {
@@ -393,8 +404,8 @@ const handleLogin = async (req, ctx) => {
   const callCtx = resolveCallContext(ctx);
   const request = req ?? {};
   const host = requireHost(request, callCtx);
-  const username = requireString(firstDefined(request?.username, callCtx?.bindings?.user, callCtx?.bindings?.username), 'username');
-  const password = requireString(firstDefined(request?.password, callCtx?.bindings?.password), 'password');
+  const username = requireFirstString([request?.username, callCtx?.bindings?.user, callCtx?.bindings?.username], 'username');
+  const password = requireFirstString([request?.password, callCtx?.bindings?.password], 'password');
   const upstream = await fetchUpstream(callCtx, `${host}${LOGIN_URI}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -492,7 +503,7 @@ const handleLogout = async (req, ctx) => {
   const request = req ?? {};
   const host = requireHost(request, callCtx);
   const session = requireSession(callCtx, host);
-  const username = requireString(firstDefined(request?.username, session?.username, callCtx?.bindings?.user, callCtx?.bindings?.username), 'username');
+  const username = requireFirstString([request?.username, session?.username, callCtx?.bindings?.user, callCtx?.bindings?.username], 'username');
   const upstream = await fetchUpstream(callCtx, `${host}${LOGOUT_URI}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: session.cookie },
@@ -553,6 +564,7 @@ export const _test = {
   readBoundedBody,
   redactValue,
   requireHost,
+  requireFirstString,
   requireJsonBody,
   resolveCallContext,
   resolveMaxResponseBytes,
