@@ -11,9 +11,17 @@
       "type": "string",
       "description": "Legacy alias for endpoint."
     },
+    "rest_base_url": {
+      "type": "string",
+      "description": "Legacy snake_case alias for endpoint."
+    },
     "baseUrl": {
       "type": "string",
       "description": "Legacy alias for endpoint."
+    },
+    "base_url": {
+      "type": "string",
+      "description": "Legacy snake_case alias for endpoint."
     },
     "headers": {
       "type": "object",

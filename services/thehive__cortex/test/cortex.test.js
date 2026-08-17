@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 const listAnalyzersPath = '/TheHive_CORTEX.TheHive_CORTEX/ListAnalyzers';
 const analyzeObservablePath = '/TheHive_CORTEX.TheHive_CORTEX/AnalyzeObservable';
@@ -246,6 +247,38 @@ test('all RPCs reject malformed endpoints and status aliases select the batch AP
 test('ListAnalyzers validates required endpoint', async () => {
   const handler = await loadHandler(listAnalyzersPath, {}, { bindings: { endpoint: '' } });
   await assert.rejects(() => handler(), /INVALID_ARGUMENT: endpoint/);
+});
+
+test('legacy snake_case endpoint aliases are schema-valid and resolve at runtime', async () => {
+  const schema = JSON.parse(readFileSync(new URL('../config.schema.json', import.meta.url), 'utf8'));
+  assert.equal(schema.additionalProperties, false);
+  assert.equal(schema.properties.rest_base_url.type, 'string');
+  assert.equal(schema.properties.base_url.type, 'string');
+
+  const urls = [];
+  setFetch(async (url) => {
+    urls.push(url);
+    return {
+      ok: true,
+      status: 200,
+      headers: new Map([['content-type', 'application/json']]),
+      text: async () => '[]',
+    };
+  });
+
+  const restAlias = await loadHandler(listAnalyzersPath, {}, {
+    bindings: { endpoint: undefined, rest_base_url: 'https://cortex-rest.example' },
+  });
+  const baseAlias = await loadHandler(listAnalyzersPath, {}, {
+    bindings: { endpoint: undefined, base_url: 'https://cortex-base.example' },
+  });
+  await restAlias();
+  await baseAlias();
+
+  assert.deepEqual(urls, [
+    'https://cortex-rest.example/api/analyzer',
+    'https://cortex-base.example/api/analyzer',
+  ]);
 });
 
 test('ListAnalyzers sends GET and maps response', async () => {
