@@ -1,7 +1,10 @@
-## 联调证据：GetStatus 跑通
+## Mock 联调记录：GetStatus
+
+以下内容来自 `test/mock_upstream.js`，仅验证 handler 的 HTTP 映射；它不是
+真实 Kibana 实例证据，也不能单独证明 Kibana 7.10.0 兼容性。
 
 # Request
-GET https://10.0.0.4:5601/api/status
+GET http://127.0.0.1:<ephemeral-port>/api/status
 Basic elastic:REDACTED
 
 

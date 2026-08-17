@@ -1,8 +1,12 @@
-## Integration Evidence: GetStatus successful
+## Mock integration evidence: GetStatus
+
+This transcript was produced by `test/mock_upstream.js`. It verifies the
+handler's HTTP request/response mapping only; it is not evidence from a real
+Kibana deployment and does not establish Kibana 7.10.0 compatibility.
 
 # Request
 ```
-https://10.0.0.4:5601/api/status
+http://127.0.0.1:<ephemeral-port>/api/status
 Basic elastic:REDACTED
 ```
 
