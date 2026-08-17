@@ -486,14 +486,14 @@ function assertUpstreamExpectation(expectation, requests) {
     if (expectation.method && request.method !== expectation.method) return false;
     const hasQueryExpectation = Object.keys(expectation.query ?? {}).length > 0;
     if (expectation.path) {
+      const requestURL = new URL(request.url, "http://127.0.0.1");
+      const expectedURL = new URL(expectation.path, "http://127.0.0.1");
+      if (expectedURL.search && request.url !== expectation.path) return false;
+      if (!expectedURL.search && requestURL.pathname !== expectedURL.pathname) return false;
       if (hasQueryExpectation) {
-        const requestURL = new URL(request.url, "http://127.0.0.1");
-        if (requestURL.pathname !== expectation.path) return false;
         for (const [key, value] of Object.entries(expectation.query)) {
           if (requestURL.searchParams.get(key) !== String(value)) return false;
         }
-      } else if (request.url !== expectation.path) {
-        return false;
       }
     } else if (hasQueryExpectation) {
       const requestURL = new URL(request.url, "http://127.0.0.1");

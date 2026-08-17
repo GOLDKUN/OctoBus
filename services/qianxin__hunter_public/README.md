@@ -5,7 +5,7 @@ This read-only service exposes Hunter account information, asset search, and bat
 Import the service root from the repository distribution package:
 
 ```bash
-octobus service import qianxin-hunter-public ./services//qianxin__hunter_public
+octobus service import qianxin-hunter-public ./services/qianxin__hunter_public
 ```
 
 Configure a non-secret API endpoint if needed:
