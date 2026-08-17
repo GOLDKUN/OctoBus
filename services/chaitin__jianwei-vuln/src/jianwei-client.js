@@ -134,7 +134,10 @@ export class JianweiClient {
                     throw error;
                 }
                 const payload = await readJson(response);
-                if (payload?.jsonrpc !== "2.0" || payload?.id !== requestId) {
+                // Jianwei's deployments sometimes return a legacy envelope without
+                // JSON-RPC metadata; when present, metadata must still be correct.
+                if ((payload?.jsonrpc !== undefined && payload.jsonrpc !== "2.0")
+                    || (payload?.id !== undefined && payload.id !== requestId)) {
                     throw serviceError("INTERNAL", "upstream returned a mismatched JSON-RPC response");
                 }
                 if (payload?.error) {
