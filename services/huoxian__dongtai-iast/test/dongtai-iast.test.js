@@ -569,6 +569,9 @@ describe('Error Handling', () => {
       `${MOCK_BASE_URL}/api/v1/vuln/summary_level?project_id=9`,
     ]);
     assert.equal(siblingAborted, true);
+    const siblingCancellation = errorWithCode('CANCELLED', 'request cancelled');
+    assert.equal(siblingCancellation.legacyCode, 'CANCELLED');
+    assert.equal(siblingCancellation.code, 1);
   });
 
   it('uses an undici dispatcher only when TLS verification is explicitly disabled', async () => {

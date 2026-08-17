@@ -36,6 +36,7 @@ const GET_SCA_DETAIL_PATH = '/Huoxian_IAST_DONGTAI.Huoxian_IAST_DONGTAI/GetScaDe
 // ============ Helpers ============
 
 const grpcCodeFor = (code) => ({
+  CANCELLED: grpcStatus.CANCELLED,
   INVALID_ARGUMENT: grpcStatus.INVALID_ARGUMENT,
   FAILED_PRECONDITION: grpcStatus.FAILED_PRECONDITION,
   PERMISSION_DENIED: grpcStatus.PERMISSION_DENIED,
