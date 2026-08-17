@@ -177,6 +177,7 @@ describe('API Method Tests (Mock)', () => {
       }
       // UpdateVulnStatus
       if (urlStr.includes('/api/v1/vuln/status') && method === 'POST') {
+        assert.deepEqual(JSON.parse(init.body), { vul_id: 1, status_id: 1 });
         return createMockResponse({ status: 201, msg: 'success' });
       }
       // GetVulnSummary
@@ -185,7 +186,8 @@ describe('API Method Tests (Mock)', () => {
           status: 201,
           data: {
             level: [{ level: '高危', level_id: 1, count: 5 }],
-            type: [{ vul_type: 'sql_injection', count: 3 }],
+            // Exact DongTai 1.14.0 VulSummaryType response keys.
+            type: [{ type: 'sql_injection', count: 3 }],
           },
         });
       }
@@ -208,7 +210,7 @@ describe('API Method Tests (Mock)', () => {
       }
       // CreateProject
       if (urlStr.includes('/api/v1/project/add') && method === 'POST') {
-        return createMockResponse({ status: 201, data: { id: 2, name: 'new-project' } });
+        return createMockResponse({ status: 201, data: { project_id: 2, project_version_id: 3 } });
       }
       // DeleteProject
       if (urlStr.includes('/api/v1/project/delete') && method === 'POST') {
@@ -216,10 +218,12 @@ describe('API Method Tests (Mock)', () => {
       }
       // ListAgents
       if (urlStr.includes('/api/v1/agents') && method === 'GET') {
+        assert.match(urlStr, /[?&]pageSize=20(?:&|$)/);
+        assert.doesNotMatch(urlStr, /[?&]page_size=/);
         return createMockResponse({
           status: 201,
           data: [
-            { id: 1, token: 'agent-token', alias: 'test-agent', language: 'JAVA', state: 'online', project_id: 1, server: '192.168.1.1', latest_time: '2024-01-01' },
+            { id: 1, token: 'agent-token', alias: 'agent-token', language: 'JAVA', running_status: 'Online', bind_project_id: 1, server: '192.168.1.1', latest_time: '2024-01-01' },
           ],
           page: { alltotal: 1, num_pages: 1, page_size: 20 },
         });
@@ -282,7 +286,7 @@ describe('API Method Tests (Mock)', () => {
 
   it('UpdateVulnStatus should update status', async () => {
     const handler = handlers[METHOD_UPDATE_VULN_STATUS_FULL];
-    const result = await handler(makeCtx({ id: 1, status: 'confirmed' }));
+    const result = await handler(makeCtx({ id: 1, status_id: 1 }));
     assert.ok(result.raw);
   });
 
@@ -292,6 +296,7 @@ describe('API Method Tests (Mock)', () => {
     assert.ok(Array.isArray(result.levels));
     assert.ok(Array.isArray(result.types));
     assert.equal(result.levels[0].level, '高危');
+    assert.equal(result.types[0].vul_type, 'sql_injection');
   });
 
   it('ListProjects should return projects list', async () => {
@@ -327,6 +332,8 @@ describe('API Method Tests (Mock)', () => {
     const result = await handler(makeCtx());
     assert.ok(Array.isArray(result.agents));
     assert.equal(result.agents[0].language, 'JAVA');
+    assert.equal(result.agents[0].alias, '');
+    assert.equal(Object.hasOwn(result.agents[0], 'token_value'), false);
   });
 
   it('GetSystemInfo should return system info', async () => {
@@ -428,12 +435,12 @@ describe('Error Handling', () => {
     );
   });
 
-  it('should throw INVALID_ARGUMENT for invalid status in UpdateVulnStatus', async () => {
+  it('should throw INVALID_ARGUMENT for invalid status_id in UpdateVulnStatus', async () => {
     globalThis.fetch = mock.fn(async () => createMockResponse({ status: 201 }));
     const handler = handlers[METHOD_UPDATE_VULN_STATUS_FULL];
     await assert.rejects(
-      () => handler(makeCtx({ id: 1, status: 'invalid_status' })),
-      (err) => err.message.includes('INVALID_ARGUMENT') && err.message.includes('status')
+      () => handler(makeCtx({ id: 1, status_id: 0 })),
+      (err) => err.message.includes('INVALID_ARGUMENT') && err.message.includes('positive integer')
     );
   });
 
@@ -564,7 +571,7 @@ describe('Error Handling', () => {
     globalThis.fetch = mock.fn(async () => createMockResponse({ status: 201, data: [{}], page: {} }));
     const calls = [
       [METHOD_LIST_VULNS_FULL, {}], [METHOD_GET_VULN_FULL, { id: 1 }],
-      [METHOD_UPDATE_VULN_STATUS_FULL, { id: 1, status: 'confirmed' }], [METHOD_GET_VULN_SUMMARY_FULL, {}],
+      [METHOD_UPDATE_VULN_STATUS_FULL, { id: 1, status_id: 1 }], [METHOD_GET_VULN_SUMMARY_FULL, {}],
       [METHOD_LIST_PROJECTS_FULL, {}], [METHOD_GET_PROJECT_FULL, { id: 1 }],
       [METHOD_CREATE_PROJECT_FULL, { name: 'sparse' }], [METHOD_DELETE_PROJECT_FULL, { id: 1 }],
       [METHOD_LIST_AGENTS_FULL, {}], [METHOD_GET_SYSTEM_INFO_FULL, {}], [METHOD_LIST_STRATEGIES_FULL, {}],

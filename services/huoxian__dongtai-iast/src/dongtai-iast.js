@@ -362,18 +362,16 @@ export function rpcdef(ctx) {
     if (rawId === undefined || rawId === null) throw errorWithCode('INVALID_ARGUMENT', 'id is required');
     const id = requireRecordID(rawId);
 
-    const status = String(firstDefined(req?.status) || '').trim();
-    if (!status) throw errorWithCode('INVALID_ARGUMENT', 'status is required');
-    const validStatuses = ['confirmed', 'ignored', 'recheck', 'fake'];
-    if (!validStatuses.includes(status)) {
-      throw errorWithCode('INVALID_ARGUMENT', `status must be one of: ${validStatuses.join(', ')}`);
-    }
+    // DongTai 1.14.0's VulStatus endpoint accepts vul_id/vul_ids and
+    // status_id.  It does not interpret status names (despite an outdated
+    // OpenAPI example in the upstream source tree).
+    const statusId = requireRecordID(firstDefined(req?.status_id, req?.statusId));
 
     const url = `${base}/api/v1/vuln/status`;
     const headers = buildHeaders(token);
-    const payload = { id, status };
+    const payload = { vul_id: id, status_id: statusId };
 
-    logFlow('UpdateVulnStatus', { id, status });
+    logFlow('UpdateVulnStatus', { id, status_id: statusId });
     const res = await fetchDongtai(url, {
       method: 'POST',
       headers,
@@ -408,7 +406,8 @@ export function rpcdef(ctx) {
 
     const types = Array.isArray(json?.data?.type)
       ? json.data.type.map((item) => ({
-          vul_type: String(item?.vul_type ?? ''),
+          // DongTai 1.14.0 VulSummaryType emits `type`, not `vul_type`.
+          vul_type: String(item?.type ?? item?.vul_type ?? ''),
           count: Number(item?.count ?? 0),
         }))
       : [];
@@ -488,7 +487,7 @@ export function rpcdef(ctx) {
     const json = await readJsonResponse(res, {});
 
     return {
-      id: Number(json?.data?.id ?? json?.id ?? 0),
+      id: Number(json?.data?.project_id ?? json?.data?.id ?? json?.project_id ?? json?.id ?? 0),
       name: String(json?.data?.name ?? name),
     };
   };
@@ -526,7 +525,8 @@ export function rpcdef(ctx) {
     const page = pageOrDefault(firstDefined(req?.page), 'page', DEFAULT_PAGE, MAX_PAGE_SIZE);
     params.push(`page=${page}`);
     const pageSize = pageOrDefault(firstDefined(req?.page_size, req?.pageSize), 'page_size', DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
-    params.push(`page_size=${pageSize}`);
+    // DongTai 1.14.0 AgentList uses camel-case pageSize.
+    params.push(`pageSize=${pageSize}`);
 
     const url = `${base}/api/v1/agents${params.length ? `?${params.join('&')}` : ''}`;
     const headers = buildHeaders(token);
@@ -639,10 +639,11 @@ export function rpcdef(ctx) {
 
   const mapAgentRecord = (item) => ({
     id: Number(item?.id ?? 0),
-    token_value: String(item?.token ?? item?.token_value ?? ''),
-    alias: String(item?.alias ?? ''),
+    // Never expose the agent ingestion credential. Upstream also substitutes
+    // token as alias when alias is blank, so suppress that derived leak too.
+    alias: item?.alias && item.alias !== item?.token ? String(item.alias) : '',
     language: String(item?.language ?? ''),
-    state: String(item?.state ?? ''),
+    state: String(item?.running_status ?? item?.state ?? ''),
     project_id: Number(item?.project_id ?? item?.bind_project_id ?? 0),
     project_name: String(item?.project_name ?? ''),
     server: String(item?.server ?? item?.server_ip ?? ''),

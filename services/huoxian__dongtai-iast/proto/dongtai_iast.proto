@@ -101,7 +101,7 @@ message GetVulnerabilityResponse {
 message UpdateVulnStatusRequest {
   string token = 1; // 认证 Token，必填
   int64 id = 2; // 漏洞 ID，必填
-  string status = 3; // 目标状态（confirmed/ignored/recheck/fake），必填
+  int64 status_id = 3; // DongTai 漏洞状态 ID，必填；可通过 vul/status_list 查询
 }
 
 message UpdateVulnStatusResponse {
@@ -202,7 +202,8 @@ message ListAgentsRequest {
 
 message AgentRecord {
   int64 id = 1; // Agent ID
-  string token_value = 2; // Agent Token
+  reserved 2;
+  reserved "token_value"; // Agent Token 属于敏感上报凭据，禁止经此 RPC 暴露
   string alias = 3; // Agent 别名
   string language = 4; // 编程语言
   string state = 5; // Agent 状态

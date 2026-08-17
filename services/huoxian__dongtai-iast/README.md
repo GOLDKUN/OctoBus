@@ -50,7 +50,7 @@ Token 获取方式：
 |------|------|----------|
 | `ListVulnerabilities` | 查询漏洞列表，支持按项目/等级/类型/状态筛选 | 只读操作，无风险 |
 | `GetVulnerability` | 获取漏洞详情（含请求/响应/调用栈） | 只读操作，可能包含敏感请求数据 |
-| `UpdateVulnStatus` | 更新漏洞状态（confirmed/ignored/recheck/fake） | 写操作，改变漏洞处置状态 |
+| `UpdateVulnStatus` | 按 DongTai `status_id` 更新漏洞状态 | 写操作，改变漏洞处置状态 |
 | `GetVulnSummary` | 获取漏洞汇总统计（按等级/类型） | 只读操作，无风险 |
 
 ### 项目管理
@@ -66,7 +66,7 @@ Token 获取方式：
 
 | 方法 | 说明 | 风险说明 |
 |------|------|----------|
-| `ListAgents` | 获取 Agent 列表 | 只读操作，无风险 |
+| `ListAgents` | 获取 Agent 列表（不会返回 Agent 上报 Token） | 只读操作，不暴露 Agent 凭据 |
 
 ### 其他
 
@@ -79,7 +79,7 @@ Token 获取方式：
 ### 写操作详细说明
 
 #### UpdateVulnStatus
-- **默认参数**: 无默认值，`id` 和 `status` 均为必填
+- **默认参数**: 无默认值，`id` 和 `status_id` 均为必填；状态 ID 来自 DongTai `vul/status_list`
 - **幂等语义**: 幂等操作，重复设置相同状态结果一致
 - **回滚方式**: 可通过再次调用设置原状态恢复
 - **审计字段**: 操作会记录在漏洞日志中
@@ -163,4 +163,5 @@ npm run validate -- --service-dir huoxian__dongtai-iast
 2. 漏洞列表返回字段可能因 DongTai 版本差异略有不同，service 做了字段兜底处理
 3. 项目删除为不可逆操作，建议在 capset 中谨慎授权
 4. 暂不支持 Agent 的启停操作（需要 Agent 端配合）
+5. 出于最小权限原则，`ListAgents` 永不返回上游响应中的 Agent Token；DongTai 在 alias 为空时会用 Token 代替 alias，service 也会清除此类派生值
 5. SCA 详情依赖 DongTai Pro 版本的功能，开源版可能返回空数据
