@@ -22,7 +22,7 @@ message ProbeConnectivityResponse {
 }
 
 message QueryIpsLogRequest {
-  int32 limit = 1; // 返回条目上限(客户端侧截断)，<=0 表示全部
+  int32 limit = 1; // 返回条目上限(客户端侧截断)，0 表示全部；负值返回 INVALID_ARGUMENT
 }
 
 // 对应日志表列:名称/源IP/源端口/目的IP/目的端口/协议/时间/类型/级别/优先级/动作/策略ID/次数/内容。

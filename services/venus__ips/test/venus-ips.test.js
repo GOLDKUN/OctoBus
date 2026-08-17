@@ -146,6 +146,32 @@ test('error mapping: network / http', async () => {
   await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'FAILED_PRECONDITION' && !e.message.includes('secret'));
 });
 
+test('early HTTP and declared-size failures cancel the upstream body', async () => {
+  const ctx = buildCtx({ host: 'https://ips', cookie: 'c=1' }, { bindings: { maxResponseBytes: 1024 } });
+  let cancellations = 0;
+  const body = () => ({ cancel: async () => { cancellations += 1; } });
+
+  withFetch(async () => ({ status: 500, ok: false, headers: createHeaders(), body: body() }));
+  await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'UNAVAILABLE');
+
+  withFetch(async () => ({ status: 403, ok: false, headers: createHeaders(), body: body() }));
+  await assert.rejects(
+    () => handlers[METHOD_PROBE_CONNECTIVITY_FULL](ctx),
+    (e) => e.legacyCode === 'PERMISSION_DENIED',
+  );
+
+  withFetch(async () => ({
+    status: 200,
+    ok: true,
+    headers: createHeaders({ 'content-length': '2048' }),
+    body: body(),
+  }));
+  await assert.rejects(() => invoke({}, ctx), (e) => e.legacyCode === 'RESOURCE_EXHAUSTED');
+  assert.equal(cancellations, 3);
+
+  await _test.cancelResponseBody({ body: { cancel: async () => { throw new Error('cancel failed'); } } });
+});
+
 test('fetch errors are redacted', async () => {
   const ctx = buildCtx({ host: 'https://ips', cookie: 'c=1' });
   withFetch(async () => { throw new Error('https://ips/?cookie=secret'); });

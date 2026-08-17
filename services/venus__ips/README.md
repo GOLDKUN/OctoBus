@@ -33,7 +33,7 @@ cookie 经 `secret.cookie` 外部传入。
 
 ### 请求 / 响应
 
-- 请求:`limit`(返回条目上限,客户端侧截断;<=0 表示全部)。
+- 请求:`limit`(返回条目上限,客户端侧截断；`0` 表示全部，负值返回 `INVALID_ARGUMENT`)。
 - 响应:`http_status`、`total`(解析到的条目数)、`entries[]`。每条 `entries` 含:
   `name`(名称)、`src_ip`/`src_port`、`dst_ip`/`dst_port`、`protocol`、`time`、`type`(类型)、
   `severity`(事件级别)、`priority`(优先级)、`action`(动作)、`policy_id`(策略ID)、`count`(发生次数)、`content`(内容)。

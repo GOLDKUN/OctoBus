@@ -199,9 +199,18 @@ const throwForHttpStatus = (status) => {
   throw errorWithCode('UNAVAILABLE', `upstream unavailable (HTTP ${status})`);
 };
 
+const cancelResponseBody = async (response) => {
+  try {
+    await response?.body?.cancel?.();
+  } catch {
+    // Cancellation is best-effort and must not replace the mapped upstream error.
+  }
+};
+
 const readBoundedText = async (response, maxBytes) => {
   const declared = Number(response.headers?.get?.('content-length'));
   if (Number.isFinite(declared) && declared > maxBytes) {
+    await cancelResponseBody(response);
     throw errorWithCode('RESOURCE_EXHAUSTED', 'upstream response exceeds configured limit');
   }
   if (response.body?.getReader) {
@@ -294,6 +303,7 @@ const runQueryIpsLog = async (req = {}, ctx = {}) => {
   const status = Number(response.status);
   if (!response.ok) {
     upstreamRequest.cleanup();
+    await cancelResponseBody(response);
     throwForHttpStatus(status);
   }
   let text;
@@ -325,7 +335,10 @@ const runProbeConnectivity = async (ctx = {}) => {
     request.cleanup();
   }
   const status = Number(response.status);
-  if (!response.ok) throwForHttpStatus(status);
+  if (!response.ok) {
+    await cancelResponseBody(response);
+    throwForHttpStatus(status);
+  }
   response.body?.cancel?.().catch?.(() => {});
   return { reachable: true, http_status: status };
 };
@@ -346,6 +359,7 @@ export const handlers = {
 export const _test = {
   buildHeaders,
   buildRequestOptions,
+  cancelResponseBody,
   buildTlsOptions,
   decodeEntities,
   errorWithCode,
