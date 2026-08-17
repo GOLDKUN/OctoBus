@@ -13,6 +13,8 @@ octobus service import --id qianxin-fw-secgate3600-policy ./services/qianxin__fw
 Set `host` to the firewall base URL. `timeoutMs` defaults to 5000. Responses are
 limited to 1 MiB by default (and never more than 5 MiB), redirects are rejected,
 and TLS verification remains enabled unless `skipTlsVerify` is explicitly set.
+The configured `host` is the only device selector. Legacy request `host` fields
+are retained for wire compatibility but are deprecated and ignored.
 
 ```json
 {
@@ -23,6 +25,8 @@ and TLS verification remains enabled unless `skipTlsVerify` is explicitly set.
 ```
 
 Secret: `username` and `password` for session-based authentication.
+Credentials are read only from the instance secret/config. Legacy request
+`username` and `password` fields are deprecated and ignored.
 
 ```json
 {

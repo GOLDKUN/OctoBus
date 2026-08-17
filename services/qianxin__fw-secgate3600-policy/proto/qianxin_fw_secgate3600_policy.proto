@@ -35,9 +35,9 @@ message HttpHeader {
 // ============================ Login / Logout (沿用现有模板) ============================
 
 message LoginRequest {
-  string host = 1;     // 设备管理地址，如 https://1.1.1.1:8080，必填
-  string username = 2; // 用户名（可由 secret.user 提供）
-  string password = 3; // 密码（可由 secret.password 提供）
+  string host = 1 [deprecated = true];     // 兼容保留且忽略；设备地址仅从实例 config 读取
+  string username = 2 [deprecated = true]; // 兼容保留且忽略；用户名仅从实例 secret/config 读取
+  string password = 3 [deprecated = true]; // 兼容保留且忽略；密码仅从实例 secret/config 读取
 }
 
 message LoginResult {
@@ -56,8 +56,8 @@ message LoginResponse {
 }
 
 message LogoutRequest {
-  string host = 1;     // 设备地址，必填
-  string username = 2; // 可选，缺省取会话/配置中的用户名
+  string host = 1 [deprecated = true];     // 兼容保留且忽略；设备地址仅从实例 config 读取
+  string username = 2 [deprecated = true]; // 兼容保留且忽略；使用已登录会话/实例配置用户名
 }
 
 message LogoutResponse {
@@ -90,7 +90,7 @@ message SecPolicyResponse {
 // ============================ ListSecPolicy ============================
 
 message ListSecPolicyRequest {
-  string host = 1;            // 设备地址，必填；选择已登录会话
+  string host = 1 [deprecated = true]; // 兼容保留且忽略；设备地址仅从实例 config 读取
   repeated string names = 2;  // 策略名称列表；空表示查询全部；单个名非空时长度 1-63
   bool is_detail = 3;         // 是否返回每条策略详情
   int64 page_index = 4;       // 页码，<=0 归一化为 1
@@ -100,7 +100,7 @@ message ListSecPolicyRequest {
 // ============================ SetSecPolicy ============================
 
 message SetSecPolicyRequest {
-  string host = 1;                              // 设备地址，必填
+  string host = 1 [deprecated = true];          // 兼容保留且忽略；设备地址仅从实例 config 读取
   repeated google.protobuf.Struct policies = 2; // 策略对象列表，非空；每个对象须含非空 name；其余字段
                                                  // (desc/action/state/src_zone/dst_zone/rule_type/user_item/
                                                  //  src_addr_item/dst_addr_item/service_item/app_item/
@@ -116,6 +116,6 @@ message MoveItem {
 }
 
 message MoveSecPolicyPriorityRequest {
-  string host = 1;             // 设备地址，必填
+  string host = 1 [deprecated = true]; // 兼容保留且忽略；设备地址仅从实例 config 读取
   repeated MoveItem moves = 2; // 调序指令列表，非空
 }

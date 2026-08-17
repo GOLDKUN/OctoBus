@@ -392,14 +392,14 @@ const extractHeaders = (res) => {
   return Array.from(map.entries()).map(([key, values]) => ({ key, values }));
 };
 
-const resolveLoginUsername = (req, ctx) =>
-  requireString(firstNonEmptyString(req?.username, ctx?.bindings?.user, ctx?.bindings?.username), 'username');
+const resolveLoginUsername = (_req, ctx) =>
+  requireString(firstNonEmptyString(ctx?.bindings?.user, ctx?.bindings?.username), 'username');
 
-const resolveLoginPassword = (req, ctx) =>
-  requireString(firstNonEmptyString(req?.password, ctx?.bindings?.password), 'password');
+const resolveLoginPassword = (_req, ctx) =>
+  requireString(ctx?.bindings?.password, 'password');
 
-const resolveLogoutUsername = (req, ctx, session) =>
-  requireString(firstNonEmptyString(req?.username, session?.username, ctx?.bindings?.user, ctx?.bindings?.username), 'username');
+const resolveLogoutUsername = (_req, ctx, session) =>
+  requireString(firstNonEmptyString(session?.username, ctx?.bindings?.user, ctx?.bindings?.username), 'username');
 
 const NAME_MAX = 63;
 

@@ -285,17 +285,16 @@ test('skipTlsVerify + IPv6 host flow through to fetch init', async () => {
   assert.match(lastReq.url, /^https:\/\/\[::1\]:8443\/v1\.0\/login$/);
 });
 
-test('paging > 0, credential sources, and 401 clears session', async () => {
+test('request credentials cannot override instance credentials and 401 clears session', async () => {
   const mod = await loadMod();
   mod._test.sessionCache.clear();
 
-  // login username/password from request override bindings
-  const c = { bindings: { host: HOST }, meta: { instance_id: 'inst-cred' } };
+  const c = { bindings: { host: HOST, user: 'configured-user', password: 'configured-password' }, meta: { instance_id: 'inst-cred' } };
   setFetch(() => loginOk);
   await mod.handlers[LOGIN]({ username: 'reqU', password: 'reqP' }, c);
-  assert.deepEqual(lastReq.body, { username: 'reqU', password: 'reqP' });
+  assert.deepEqual(lastReq.body, { username: 'configured-user', password: 'configured-password' });
   const sess = mod._test.getSession(c, HOST);
-  assert.equal(sess.username, 'reqU');
+  assert.equal(sess.username, 'configured-user');
 
   // ListSecPolicy with explicit paging > 0
   setFetch(() => restOk([], { total: 0 }));
@@ -315,6 +314,17 @@ test('paging > 0, credential sources, and 401 clears session', async () => {
   setFetch(() => makeRes(200, { head: { error_code: 0 } }));
   await mod.handlers[LOGOUT]({}, { bindings: { host: HOST }, meta: { instance_id: 'inst-cred' } });
   assert.equal(lastReq.body.username, 'sessU');
+});
+
+test('request credentials do not satisfy missing instance secrets', async () => {
+  const mod = await loadMod();
+  mod._test.sessionCache.clear();
+  const c = { bindings: { host: HOST }, meta: { instance_id: 'inst-no-secret' } };
+
+  await assert.rejects(
+    mod.handlers[LOGIN]({ username: 'request-user', password: 'request-password' }, c),
+    /INVALID_ARGUMENT.*username is required/,
+  );
 });
 
 test('logout empty-body branches and toValue fallback', async () => {
