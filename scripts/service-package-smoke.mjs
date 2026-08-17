@@ -484,7 +484,11 @@ function assertUpstreamExpectation(expectation, requests) {
   if (expectation === undefined) return;
   const matched = requests.some((request) => {
     if (expectation.method && request.method !== expectation.method) return false;
-    if (expectation.path && request.url !== expectation.path) return false;
+    const requestURL = new URL(request.url, "http://127.0.0.1");
+    if (expectation.path && requestURL.pathname !== expectation.path) return false;
+    for (const [key, value] of Object.entries(expectation.query ?? {})) {
+      if (requestURL.searchParams.get(key) !== String(value)) return false;
+    }
     for (const [key, value] of Object.entries(expectation.headers ?? {})) {
       if (request.headers[String(key).toLowerCase()] !== String(value)) return false;
     }
