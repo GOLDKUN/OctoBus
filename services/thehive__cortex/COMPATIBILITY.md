@@ -5,7 +5,7 @@ mock suite in `test/cortex.test.js`. It covers the Cortex 3.1 REST endpoints
 used by this package, authentication, status/report variants, and error
 handling.
 
-An official-container check was attempted on 2026-08-14:
+An official-container check was repeated on 2026-08-17:
 
 ```sh
 docker pull thehiveproject/cortex:3.1.7
@@ -18,5 +18,8 @@ The container could not be started because the official image is `linux/amd64`
 while the available runner is `linux/arm64/v8`; Docker reported
 `exec /opt/cortex/entrypoint: exec format error`. Therefore this repository
 contains mock-only compatibility evidence, not a claim of a live Cortex API
-verification. Re-run the two commands above on an amd64 Docker host before
+verification. The PR narrative describes a Cortex 3.2.0 run, but its referenced
+screenshots are not present in the committed service tree and a 3.2.0 run does
+not establish the advertised 3.1.x compatibility. Re-run the commands above on
+an amd64 Docker host and retain sanitized responses from a 3.1.x instance before
 releasing against a real Cortex deployment.

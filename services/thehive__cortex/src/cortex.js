@@ -259,7 +259,17 @@ export function rpcdef(ctx) {
   };
 
   const readJsonResponse = async (res, emptyValue) => {
-    const text = await readResponseText(res);
+    let text;
+    try {
+      text = await readResponseText(res);
+    } catch (e) {
+      if (e instanceof GrpcError) throw e;
+      if (e?.name === 'TimeoutError' || e?.name === 'AbortError' ||
+          e?.cause?.name === 'TimeoutError' || e?.cause?.name === 'AbortError') {
+        throw errorWithCode('DEADLINE_EXCEEDED', `request timed out after ${timeoutMs}ms`);
+      }
+      throw errorWithCode('UNAVAILABLE', 'upstream response could not be read');
+    }
     const contentType = res.headers.get('content-type') || '';
     if (!res.ok) {
       throwForHttpError(res.status);
@@ -507,7 +517,8 @@ export function rpcdef(ctx) {
     const url = `${baseUrl}/api/job${queryParts.length ? `?${queryParts.join('&')}` : ''}`;
     const headers = buildHeaders(req, false);
 
-    logFlow('ListJobs:start', { dataType, data, analyzer, range });
+    // Observable values can be sensitive; never write the data filter to logs.
+    logFlow('ListJobs:start', { dataType, analyzer, range, hasDataFilter: Boolean(data) });
     const res = await fetchCortex(url, { method: 'GET', headers });
     const json = await readJsonResponse(res, []);
 

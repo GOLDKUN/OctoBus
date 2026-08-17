@@ -583,6 +583,51 @@ test('timeout error maps to DEADLINE_EXCEEDED', async () => {
   await assert.rejects(() => handler(), /DEADLINE_EXCEEDED/);
 });
 
+test('response body timeout maps to DEADLINE_EXCEEDED', async () => {
+  setFetch(async () => ({
+    ok: true,
+    status: 200,
+    headers: new Map([['content-type', 'application/json']]),
+    body: { getReader: () => ({
+      read: async () => {
+        const err = new Error('body timed out');
+        err.name = 'TimeoutError';
+        throw err;
+      },
+      releaseLock: () => {},
+    }) },
+  }));
+  const handler = await loadHandler(listAnalyzersPath, {}, {
+    bindings: { endpoint: 'http://localhost:9002', timeoutMs: 25 },
+  });
+  await assert.rejects(() => handler(), /DEADLINE_EXCEEDED: request timed out after 25ms/);
+});
+
+test('response body abort and read failures map to stable gRPC errors', async () => {
+  for (const [name, expected] of [
+    ['AbortError', /DEADLINE_EXCEEDED/],
+    ['TypeError', /UNAVAILABLE: upstream response could not be read/],
+    ['CausedTimeout', /DEADLINE_EXCEEDED/],
+  ]) {
+    setFetch(async () => ({
+      ok: true,
+      status: 200,
+      headers: new Map([['content-type', 'application/json']]),
+      body: { getReader: () => ({
+        read: async () => {
+          const err = new Error('body read failed');
+          err.name = name;
+          if (name === 'CausedTimeout') err.cause = { name: 'TimeoutError' };
+          throw err;
+        },
+        releaseLock: () => {},
+      }) },
+    }));
+    const handler = await loadHandler(listAnalyzersPath);
+    await assert.rejects(() => handler(), expected);
+  }
+});
+
 test('GetJobReport maps failure report', async () => {
   setFetch(async () => ({
     ok: true,
@@ -657,6 +702,27 @@ test('ListJobs sends GET with filters and maps response', async () => {
   assert.equal(res.data.jobs[0].id, 'j1');
   assert.equal(res.data.jobs[0].status, 'Success');
   assert.equal(res.data.jobs[1].status, 'InProgress');
+});
+
+test('ListJobs does not log the observable data filter', async () => {
+  const observable = 'sensitive.example.test';
+  const logged = [];
+  const originalLog = console.log;
+  console.log = (...args) => logged.push(args);
+  try {
+    setFetch(async () => ({
+      ok: true,
+      status: 200,
+      headers: new Map([['content-type', 'application/json']]),
+      text: async () => '[]',
+    }));
+    const handler = await loadHandler(listJobsPath, { data: observable });
+    await handler();
+  } finally {
+    console.log = originalLog;
+  }
+  assert.equal(JSON.stringify(logged).includes(observable), false);
+  assert.equal(JSON.stringify(logged).includes('hasDataFilter'), true);
 });
 
 test('ListJobs handles empty response', async () => {
