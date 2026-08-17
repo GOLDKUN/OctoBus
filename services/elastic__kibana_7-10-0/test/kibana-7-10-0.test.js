@@ -289,6 +289,9 @@ test('base URLs with credentials, queries, or fragments are rejected and log URL
 test('TLS skip aliases default safely, agree, and reject conflicts', async () => {
   assert.equal(_test.shouldSkipTlsVerify({}), false);
   assert.equal(_test.shouldSkipTlsVerify({ tlsInsecureSkipVerify: true }), true);
+  assert.equal(_test.shouldSkipTlsVerify({ tlsInsecureSkipVerify: 1 }), true);
+  assert.equal(_test.shouldSkipTlsVerify({ tlsInsecureSkipVerify: 0 }), false);
+  assert.equal(_test.shouldSkipTlsVerify({ skipTlsVerify: '  ', insecureSkipVerify: true }), true);
   assert.equal(_test.shouldSkipTlsVerify({ skipTlsVerify: false, tlsInsecureSkipVerify: false, insecureSkipVerify: 'off' }), false);
   assert.equal(_test.shouldSkipTlsVerify({ skipTlsVerify: true, tlsInsecureSkipVerify: 'true', insecureSkipVerify: 'on' }), true);
   assert.throws(
@@ -298,6 +301,21 @@ test('TLS skip aliases default safely, agree, and reject conflicts', async () =>
   await assert.rejects(
     _test.buildTlsOptions({ skipTlsVerify: false, tlsInsecureSkipVerify: true }),
     (err) => err.legacyCode === 'INVALID_ARGUMENT',
+  );
+  assert.throws(
+    () => _test.shouldSkipTlsVerify({ skipTlsVerify: 'sometimes' }),
+    (err) => err.legacyCode === 'INVALID_ARGUMENT' && err.message.includes('invalid TLS skip alias value'),
+  );
+  assert.throws(
+    () => _test.shouldSkipTlsVerify({ skipTlsVerify: 2 }),
+    (err) => err.legacyCode === 'INVALID_ARGUMENT',
+  );
+  await assert.rejects(
+    handlers['Elastic_Kibana_7_10_0.Elastic_Kibana_7_10_0/GetStatus'](
+      {},
+      buildCtx({ bindings: { skipTlsVerify: false, insecureSkipVerify: true } }),
+    ),
+    (err) => err.legacyCode === 'INVALID_ARGUMENT' && err.message.includes('conflicting TLS skip aliases'),
   );
 });
 

@@ -128,12 +128,29 @@ const resolveMaxResponseBytes = (ctx = {}) => {
   return Math.min(Math.trunc(raw), MAX_RESPONSE_BYTES);
 };
 
+const parseTlsAlias = (value) => {
+  const raw = unwrapScalar(value);
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'number') {
+    if (raw === 1) return true;
+    if (raw === 0) return false;
+  }
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === '') return undefined;
+    if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  }
+  throw errorWithCode('INVALID_ARGUMENT', 'invalid TLS skip alias value');
+};
+
 const shouldSkipTlsVerify = (bindings = {}) => {
   const values = [
     bindings.skipTlsVerify,
     bindings.tlsInsecureSkipVerify,
     bindings.insecureSkipVerify,
-  ].filter((value) => value !== undefined && value !== null).map((value) => toBool(value, false));
+  ].map(parseTlsAlias).filter((value) => value !== undefined);
   if (values.includes(true) && values.includes(false)) {
     throw errorWithCode('INVALID_ARGUMENT', 'conflicting TLS skip aliases');
   }
@@ -292,8 +309,11 @@ const executeRequest = async (url, ctx = {}, options = {}) => {
     return { httpStatus, httpBody: rawBody };
   } catch (err) {
     const code = err?.legacyCode || (timedOut || err?.name === 'AbortError' || err?.name === 'TimeoutError' ? 'DEADLINE_EXCEEDED' : 'UNAVAILABLE');
-    const message = code === 'DEADLINE_EXCEEDED' ? `${options.action || 'fetch'} timed out` : `${options.action || 'fetch'} failed`;
     logFlow(ctx, options.action || 'fetch:error', { url, code, errorName: err?.name || 'Error' });
+    if (err?.legacyCode) {
+      throw attachResponse(err, { http_status: 0, http_body: '' });
+    }
+    const message = code === 'DEADLINE_EXCEEDED' ? `${options.action || 'fetch'} timed out` : `${options.action || 'fetch'} failed`;
     throw attachResponse(errorWithCode(code, message), { http_status: 0, http_body: '' });
   } finally {
     clearTimeout(timer);
@@ -598,6 +618,7 @@ export const _test = {
   toTrimmedString,
   toFiniteInt,
   toBool,
+  parseTlsAlias,
   toJsonString,
   errorWithCode,
   buildHeaders,
