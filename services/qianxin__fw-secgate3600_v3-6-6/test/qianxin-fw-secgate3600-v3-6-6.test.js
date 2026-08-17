@@ -48,6 +48,7 @@ const createHeaders = (entries = {}) => {
 
 const fakeResponse = (status, body, headers = {}) => ({ status, headers: createHeaders(headers), text: async () => body });
 const withFetch = (impl) => { globalThis.fetch = impl; };
+const invoke = (method, ctx, req = {}) => handlers[method]({ ...ctx, req });
 
 test.afterEach(() => { globalThis.fetch = originalFetch; _test.sessionCache.clear(); });
 
@@ -62,30 +63,30 @@ test('login → block → query → unblock → logout full flow', async () => {
     const login = await rpcdef(ctx)[LOGIN_PATH]();
     assert.equal(login.success, true);
     assert.equal(login.error_code, 'success');
-    assert.ok(login.token);
+    assert.equal(login.token, ''); // tokens remain server-side and are never returned to callers
     assert.equal(login.http_status, 200);
 
-    const block = await handlers[METHOD_BLOCK_FULL]({ items: [
+    const block = await invoke(METHOD_BLOCK_FULL, ctx, { items: [
       { ip_start: '1.1.1.1', desc: 'soc', schedule: 'always' },
       { ip_start: '2.2.2.2', ip_end: '2.2.2.5', enable: 'enable' },
-    ] }, ctx);
+    ] });
     assert.equal(block.results.length, 2);
     assert.equal(block.results[0].error_code, 0);
     assert.equal(block.results[0].ip_end, '1.1.1.1'); // defaulted from ip_start
     assert.equal(mock.state.blacklist.size, 2);
 
-    const query = await handlers[METHOD_QUERY_FULL]({ search_key: '1.1.1.1' }, ctx);
+    const query = await invoke(METHOD_QUERY_FULL, ctx, { search_key: '1.1.1.1' });
     assert.equal(query.error_code, 0);
     assert.equal(query.total, 1);
 
     const queryAll = await rpcdef(ctx)[QUERY_PATH]();
     assert.equal(queryAll.total, 2);
 
-    const unblock = await handlers[METHOD_UNBLOCK_FULL]({ targets: [{ ip_start: '1.1.1.1' }] }, ctx);
+    const unblock = await invoke(METHOD_UNBLOCK_FULL, ctx, { targets: [{ ip_start: '1.1.1.1' }] });
     assert.equal(unblock.results.length, 1);
     assert.equal(mock.state.blacklist.has('1.1.1.1'), false);
 
-    const logout = await handlers[METHOD_LOGOUT_FULL]({}, ctx);
+    const logout = await invoke(METHOD_LOGOUT_FULL, ctx);
     assert.equal(logout.http_status, 200);
     assert.equal(mock.state.sessions.size, 0);
   } finally {
@@ -97,7 +98,7 @@ test('login failure does not cache a session', async () => {
   const mock = await createMockServer();
   try {
     const ctx = buildCtx({ host: mock.host, bindings: { password: 'wrong' } });
-    const login = await handlers[METHOD_LOGIN_FULL]({}, ctx);
+    const login = await invoke(METHOD_LOGIN_FULL, ctx);
     assert.equal(login.success, false);
     assert.equal(login.token, '');
     await assert.rejects(() => rpcdef(ctx)[BLOCK_PATH]({ items: [{ ip_start: '9.9.9.9' }] }), (err) => {
@@ -112,11 +113,11 @@ test('login failure does not cache a session', async () => {
 // ---------- validation errors ----------
 
 test('missing host / credentials / items reject with INVALID_ARGUMENT', async () => {
-  await assert.rejects(() => handlers[METHOD_LOGIN_FULL]({}, buildCtx({ bindings: { host: '' } })),
+  await assert.rejects(() => invoke(METHOD_LOGIN_FULL, buildCtx({ bindings: { host: '' } })),
     (e) => e.legacyCode === 'INVALID_ARGUMENT');
-  await assert.rejects(() => handlers[METHOD_LOGIN_FULL]({}, buildCtx({ host: 'https://h:8443', bindings: { user: '', username: '' } })),
+  await assert.rejects(() => invoke(METHOD_LOGIN_FULL, buildCtx({ host: 'https://h:8443', bindings: { user: '', username: '' } })),
     (e) => e.legacyCode === 'INVALID_ARGUMENT');
-  await assert.rejects(() => handlers[METHOD_LOGIN_FULL]({ username: 'u' }, buildCtx({ host: 'https://h:8443', bindings: { password: '' } })),
+  await assert.rejects(() => invoke(METHOD_LOGIN_FULL, buildCtx({ host: 'https://h:8443', bindings: { password: '' } }), { username: 'u' }),
     (e) => e.legacyCode === 'INVALID_ARGUMENT');
 
   const ctx = buildCtx({ host: 'https://h:8443' });
@@ -146,18 +147,18 @@ test('401 from rest clears session and maps to PERMISSION_DENIED', async () => {
 test('network failure maps to UNAVAILABLE', async () => {
   const ctx = buildCtx({ host: 'https://fw:8443' });
   withFetch(async () => { throw new Error('ECONNREFUSED'); });
-  await assert.rejects(() => handlers[METHOD_LOGIN_FULL]({}, ctx), (e) => e.legacyCode === 'UNAVAILABLE');
+  await assert.rejects(() => invoke(METHOD_LOGIN_FULL, ctx), (e) => e.legacyCode === 'UNAVAILABLE');
 });
 
 test('non-JSON and empty bodies reject with UNKNOWN', async () => {
   const ctx = buildCtx({ host: 'https://fw:8443' });
   withFetch(async () => fakeResponse(200, 'not-json'));
-  await assert.rejects(() => handlers[METHOD_LOGIN_FULL]({}, ctx), (e) => e.legacyCode === 'UNKNOWN');
+  await assert.rejects(() => invoke(METHOD_LOGIN_FULL, ctx), (e) => e.legacyCode === 'UNKNOWN');
   withFetch(async () => fakeResponse(200, '   '));
-  await assert.rejects(() => handlers[METHOD_LOGIN_FULL]({}, ctx), (e) => e.legacyCode === 'UNKNOWN');
+  await assert.rejects(() => invoke(METHOD_LOGIN_FULL, ctx), (e) => e.legacyCode === 'UNKNOWN');
 });
 
-test('logout tolerates empty 2xx body but rejects empty non-2xx', async () => {
+test('logout tolerates empty 2xx body and maps upstream 5xx to UNAVAILABLE', async () => {
   const ctx1 = buildCtx({ host: 'https://fw:8443' });
   primeSession(ctx1);
   withFetch(async () => fakeResponse(204, ''));
@@ -168,7 +169,7 @@ test('logout tolerates empty 2xx body but rejects empty non-2xx', async () => {
   const ctx2 = buildCtx({ host: 'https://fw:8443' });
   primeSession(ctx2);
   withFetch(async () => fakeResponse(500, ''));
-  await assert.rejects(() => rpcdef(ctx2)[LOGOUT_PATH]({ username: 'api_user' }), (e) => e.legacyCode === 'UNKNOWN');
+  await assert.rejects(() => rpcdef(ctx2)[LOGOUT_PATH]({ username: 'api_user' }), (e) => e.legacyCode === 'UNAVAILABLE');
 });
 
 test('login caches session from set-cookie array and reuses for block', async () => {
@@ -182,9 +183,9 @@ test('login caches session from set-cookie array and reuses for block', async ()
     }
     return fakeResponse(200, JSON.stringify({ head: { error_code: 0, error_string: 'ok' }, data: '' }));
   });
-  const login = await handlers[METHOD_LOGIN_FULL]({}, ctx);
-  assert.equal(login.token, 'abc');
-  const block = await handlers[METHOD_BLOCK_FULL]({ items: [{ ip_start: '5.5.5.5' }] }, ctx);
+  const login = await invoke(METHOD_LOGIN_FULL, ctx);
+  assert.equal(login.token, '');
+  const block = await invoke(METHOD_BLOCK_FULL, ctx, { items: [{ ip_start: '5.5.5.5' }] });
   assert.equal(block.results[0].error_string, 'ok');
   assert.ok(calls >= 2);
 });
@@ -204,12 +205,9 @@ test('helpers cover normalization, conversion and value mapping', () => {
   const h = _test;
   assert.equal(h.normalizeBaseUrl('https://1.2.3.4:8443/'), 'https://1.2.3.4:8443');
   assert.equal(h.normalizeBaseUrl('ftp://x:1'), '');
-  assert.equal(h.normalizeBaseUrl('https://nohost'), '');
+  assert.equal(h.normalizeBaseUrl('https://nohost'), 'https://nohost');
   assert.equal(h.normalizeBaseUrl('https://h:8443/path'), '');
   assert.equal(h.normalizeBaseUrl(''), '');
-  assert.deepEqual(h.parseAuthority('1.2.3.4:8443'), { hostPart: '1.2.3.4', portPart: '8443' });
-  assert.equal(h.parseAuthority('noport'), null);
-  assert.equal(h.parseAuthority(''), null);
 
   assert.equal(h.toBoolean('yes'), true);
   assert.equal(h.toBoolean('off'), false);
@@ -237,9 +235,9 @@ test('helpers cover normalization, conversion and value mapping', () => {
 
   assert.equal(h.mergeCookieHeader(['token=zzz;path=/'], 'override'), 'token=override');
   assert.equal(h.mergeCookieHeader(['  ', 'novalue'], ''), '');
-  assert.deepEqual(h.buildTlsOptions({ skipTlsVerify: true }).skipTlsVerify, true);
+  assert.ok(h.buildTlsOptions({ skipTlsVerify: true }).dispatcher);
   assert.deepEqual(h.buildTlsOptions({}), {});
-  assert.deepEqual(h.buildHeaders({ bindings: { headers: { A: '1' } } }, { B: '2' }), { A: '1', B: '2' });
+  assert.deepEqual(h.buildHeaders({ bindings: { headers: { A: '1' } } }, { B: '2' }), { a: '1', B: '2' });
 
   assert.equal(h.getInstanceKey({ meta: { instance_id: 'i' } }), 'i');
   assert.equal(h.getInstanceKey({}), 'default');
@@ -265,8 +263,8 @@ test('host alias resolution and tls/value edge branches', () => {
   assert.equal(resolve({ base_url: 'https://d:4' }), 'https://d:4');
   assert.equal(h.requireHost({ host: 'https://e:5' }, h.resolveCallContext({ bindings: {} })), 'https://e:5');
 
-  assert.equal(h.buildTlsOptions({ tlsInsecureSkipVerify: true }).insecureSkipVerify, true);
-  assert.equal(h.buildTlsOptions({ insecureSkipVerify: true }).skipTlsVerify, true);
+  assert.ok(h.buildTlsOptions({ tlsInsecureSkipVerify: true }).dispatcher);
+  assert.ok(h.buildTlsOptions({ insecureSkipVerify: true }).dispatcher);
 
   assert.deepEqual(h.toValue([null]), { listValue: { values: [{ nullValue: 'NULL_VALUE' }] } });
   assert.deepEqual(h.toValue({ a: null }), { structValue: { fields: { a: { nullValue: 'NULL_VALUE' } } } });
@@ -302,20 +300,20 @@ test('camelCase request aliases are accepted', async () => {
   try {
     const ctx = buildCtx({ host: mock.host, meta: { instanceId: nextInstanceId() } });
     await rpcdef(ctx)[LOGIN_PATH]();
-    const block = await handlers[METHOD_BLOCK_FULL]({ items: [{ ipStart: '3.3.3.3', ipEnd: '3.3.3.6' }] }, ctx);
+    const block = await invoke(METHOD_BLOCK_FULL, ctx, { items: [{ ipStart: '3.3.3.3', ipEnd: '3.3.3.6' }] });
     assert.equal(block.results[0].ip_end, '3.3.3.6');
-    const q = await handlers[METHOD_QUERY_FULL]({ searchKey: '3.3.3.3' }, ctx);
+    const q = await invoke(METHOD_QUERY_FULL, ctx, { searchKey: '3.3.3.3' });
     assert.equal(q.total, 1);
-    const u = await handlers[METHOD_UNBLOCK_FULL]({ targets: [{ ipStart: '3.3.3.3', ipEnd: '3.3.3.6' }] }, ctx);
+    const u = await invoke(METHOD_UNBLOCK_FULL, ctx, { targets: [{ ipStart: '3.3.3.3', ipEnd: '3.3.3.6' }] });
     assert.equal(u.results.length, 1);
   } finally {
     await mock.close();
   }
 });
 
-test('edge branches: authority parsing, instance key, partial session, cookie helpers', () => {
+test('edge branches: URL parsing, instance key, partial session, cookie helpers', () => {
   const h = _test;
-  assert.equal(h.normalizeBaseUrl('https://host:bad'), ''); // non-numeric port
+  assert.equal(h.normalizeBaseUrl('https://host:bad'), ''); // invalid port
   assert.equal(h.normalizeBaseUrl('https://:8443'), '');    // empty host
   assert.equal(h.getInstanceKey({ meta: { instanceId: 'camel' } }), 'camel');
   assert.deepEqual(h.resolveCallContext({ request: { a: 1 } }).req, { a: 1 });
@@ -352,7 +350,7 @@ test('upstream responses missing result/head are tolerated', async () => {
   // login response without result object → result defaults to {}
   const loginCtx = buildCtx({ host: 'https://fw:8443' });
   withFetch(async () => fakeResponse(200, JSON.stringify({ success: false })));
-  const login = await handlers[METHOD_LOGIN_FULL]({}, loginCtx);
+  const login = await invoke(METHOD_LOGIN_FULL, loginCtx);
   assert.equal(login.success, false);
   assert.equal(login.error_code, '');
 
@@ -360,7 +358,53 @@ test('upstream responses missing result/head are tolerated', async () => {
   const ctx = buildCtx({ host: 'https://fw:8443' });
   primeSession(ctx);
   withFetch(async () => fakeResponse(200, JSON.stringify({ data: [] })));
-  const q = await handlers[METHOD_QUERY_FULL]({}, ctx);
+  const q = await invoke(METHOD_QUERY_FULL, ctx);
   assert.equal(q.error_code, 0);
   assert.equal(q.total, 0);
+});
+
+test('SDK 0.6 handlers consume one call context and sessions are isolated by instance and user', async () => {
+  const first = buildCtx({ host: 'https://fw:8443', instance_id: 'first' });
+  const second = buildCtx({ host: 'https://fw:8443', instance_id: 'second', bindings: { user: 'other' } });
+  primeSession(first);
+  assert.ok(_test.getSession(first, 'https://fw:8443'));
+  assert.equal(_test.getSession(second, 'https://fw:8443'), undefined);
+  await assert.rejects(() => invoke(METHOD_QUERY_FULL, second), (e) => e.legacyCode === 'FAILED_PRECONDITION');
+});
+
+test('transport is bounded, does not follow redirects, and redacts authentication material', async () => {
+  const ctx = buildCtx({ host: 'https://fw:8443', bindings: { maxResponseBytes: 5 } });
+  let request;
+  withFetch(async (_url, init) => {
+    request = init;
+    return fakeResponse(200, '123456', { 'content-length': '6' });
+  });
+  await assert.rejects(() => _test.fetchUpstream(ctx, 'https://fw:8443/v1.0/login'),
+    (e) => e.legacyCode === 'FAILED_PRECONDITION');
+  assert.equal(request.redirect, 'error');
+  assert.ok(request.signal instanceof AbortSignal);
+
+  withFetch(async () => fakeResponse(200, JSON.stringify({ success: true, result: { token: 'top-secret', error_code: 'success' } }), {
+    'set-cookie': 'token=top-secret; Path=/',
+  }));
+  const login = await invoke(METHOD_LOGIN_FULL, buildCtx({ host: 'https://fw:8443' }));
+  assert.equal(login.token, '');
+  assert.equal(login.raw_body, '');
+  assert.deepEqual(login.headers, []);
+  assert.deepEqual(login.raw_json, { structValue: { fields: {
+    success: { boolValue: true }, result: { structValue: { fields: {
+      token: { stringValue: 'REDACTED' }, error_code: { stringValue: 'success' },
+    } } },
+  } } });
+});
+
+test('error messages redact credentials and timeout / HTTP failures map predictably', async () => {
+  const ctx = buildCtx({ host: 'https://fw:8443' });
+  withFetch(async () => { throw new Error('password=SuperSecret! token=abc'); });
+  await assert.rejects(() => invoke(METHOD_LOGIN_FULL, ctx),
+    (e) => e.legacyCode === 'UNAVAILABLE' && !/SuperSecret|token=abc/.test(e.message));
+
+  primeSession(ctx);
+  withFetch(async () => fakeResponse(503, JSON.stringify({ error: 'temporary' })));
+  await assert.rejects(() => invoke(METHOD_QUERY_FULL, ctx), (e) => e.legacyCode === 'UNAVAILABLE');
 });

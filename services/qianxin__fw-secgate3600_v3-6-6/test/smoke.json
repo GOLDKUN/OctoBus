@@ -1,0 +1,12 @@
+{
+  "method": "QIANXIN_FW_SecGate3600_V3_6_6.QIANXIN_FW_SecGate3600_V3_6_6/Login",
+  "request": {},
+  "expectUpstream": true,
+  "requireBusinessSuccess": true,
+  "requireUpstreamPerProtocol": true,
+  "protocols": ["connect", "grpc", "mcp"],
+  "upstream": {
+    "method": "POST",
+    "path": "/v1.0/login"
+  }
+}

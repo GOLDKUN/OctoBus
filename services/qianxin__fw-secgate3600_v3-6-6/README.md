@@ -23,8 +23,9 @@
 2. 后续业务请求 `POST /v1.0/rest/`，携带 `Cookie: PHPSESSID=...; token=<token>`。
 3. `POST /v1.0/out` 注销，token 立即失效。
 
-会话（token + cookie）按 `instance_id + host` 缓存在进程内，`BlockIP/UnblockIP/QueryBlacklist`
-前必须先 `Login`。
+会话（token + cookie）按 `instance_id + host + user` 隔离、最多 256 条、30 分钟过期，并采用 LRU
+淘汰；`BlockIP/UnblockIP/QueryBlacklist` 前必须先 `Login`。token、cookie、密码和认证响应不会回传
+到 RPC 输出或日志。
 
 ## 配置
 
@@ -34,6 +35,7 @@
 {
   "host": "https://198.51.100.10:8443",
   "timeoutMs": 5000,
+  "maxResponseBytes": 1048576,
   "skipTlsVerify": true
 }
 ```
@@ -79,6 +81,8 @@
 | 未先 `Login` | `FAILED_PRECONDITION` |
 | 上游 401 / 403（会话失效，自动清会话） | `PERMISSION_DENIED` |
 | 网络错误 / 超时 | `UNAVAILABLE` |
+| 上游 5xx | `UNAVAILABLE` |
+| 上游其他非 2xx / 超过响应大小上限 | `FAILED_PRECONDITION` |
 | 响应非 JSON / 空体 | `UNKNOWN` |
 
 ## 建议 capset

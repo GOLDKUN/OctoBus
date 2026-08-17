@@ -37,12 +37,12 @@ message LoginRequest {
 
 message LoginResponse {
   bool success = 1;                 // 设备返回 success 字段
-  string token = 2;                 // 认证 token，已写入会话缓存
+  string token = 2;                 // 始终为空；认证 token 仅保存在受限的进程内会话缓存
   string error_code = 3;            // 设备 result.error_code
   int32 http_status = 4;            // 上游 HTTP 状态码
-  string raw_body = 5;              // 上游原始响应体
-  google.protobuf.Value raw_json = 6; // 上游原始 JSON 透传
-  repeated HttpHeader headers = 7;  // 上游响应头(含 set-cookie)
+  string raw_body = 5;              // 始终为空，避免泄露认证材料
+  google.protobuf.Value raw_json = 6; // 上游 JSON（认证字段已脱敏）
+  repeated HttpHeader headers = 7;  // 上游响应头（敏感头已移除）
 }
 
 message BlacklistItem {
@@ -103,7 +103,7 @@ message LogoutRequest {
 
 message LogoutResponse {
   int32 http_status = 1;           // 上游 HTTP 状态码
-  string raw_body = 2;             // 上游原始响应体
-  google.protobuf.Value raw_json = 3; // 上游原始 JSON 透传，可能为空
-  repeated HttpHeader headers = 4; // 上游响应头
+  string raw_body = 2;             // 始终为空，避免泄露认证材料
+  google.protobuf.Value raw_json = 3; // 上游 JSON（认证字段已脱敏），可能为空
+  repeated HttpHeader headers = 4; // 上游响应头（敏感头已移除）
 }
