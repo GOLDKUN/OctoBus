@@ -509,10 +509,37 @@ describe('Error Handling', () => {
     );
   });
 
-  it('fails the summary RPC sequentially when summary_level fails', async () => {
-    const requested = [];
-    let typeBodyConsumed = false;
+  it('starts both summary endpoint requests concurrently', async () => {
+    let started = 0;
+    let releaseBarrier;
+    const barrier = new Promise((resolve) => { releaseBarrier = resolve; });
     globalThis.fetch = mock.fn(async (url) => {
+      const urlStr = String(url);
+      started += 1;
+      if (started === 2) releaseBarrier();
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => {
+          await barrier;
+          return JSON.stringify(urlStr.includes('/summary_type')
+            ? { status: 201, data: { type: [{ type: 'x', count: 1 }] } }
+            : { status: 201, data: { level: [{ level: '高危', level_id: 1, count: 1 }] } });
+        },
+      };
+    });
+
+    const result = await handlers[METHOD_GET_VULN_SUMMARY_FULL](makeCtx());
+    assert.equal(started, 2);
+    assert.equal(result.types[0].vul_type, 'x');
+    assert.equal(result.levels[0].level, '高危');
+  });
+
+  it('aborts and settles the slow summary sibling while preserving the original error', async () => {
+    const requested = [];
+    let siblingAborted = false;
+    globalThis.fetch = mock.fn(async (url, init) => {
       const urlStr = String(url);
       requested.push(urlStr);
       if (urlStr.includes('/summary_type')) {
@@ -520,15 +547,16 @@ describe('Error Handling', () => {
           ok: true,
           status: 200,
           headers: { get: () => null },
-          text: async () => {
-            typeBodyConsumed = true;
-            return JSON.stringify({ status: 201, data: { type: [] } });
-          },
+          text: async () => new Promise((_resolve, reject) => {
+            const rejectCancelled = () => {
+              siblingAborted = true;
+              reject(Object.assign(new Error('sibling aborted'), { name: 'AbortError' }));
+            };
+            if (init.signal.aborted) rejectCancelled();
+            else init.signal.addEventListener('abort', rejectCancelled, { once: true });
+          }),
         };
       }
-      // The second request must not start until the first response has been
-      // completely consumed; this prevents an orphan concurrent sibling.
-      assert.equal(typeBodyConsumed, true);
       return createMockResponse({ status: 500 }, 503);
     });
 
@@ -540,6 +568,7 @@ describe('Error Handling', () => {
       `${MOCK_BASE_URL}/api/v1/vuln/summary_type?project_id=9`,
       `${MOCK_BASE_URL}/api/v1/vuln/summary_level?project_id=9`,
     ]);
+    assert.equal(siblingAborted, true);
   });
 
   it('uses an undici dispatcher only when TLS verification is explicitly disabled', async () => {

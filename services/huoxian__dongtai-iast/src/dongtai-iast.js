@@ -246,6 +246,14 @@ export function rpcdef(ctx) {
 
   const fetchDongtai = async (url, init) => {
     const controller = new AbortController();
+    const externalSignal = init?.signal;
+    const abortFromCaller = () => controller.abort();
+    if (externalSignal?.aborted) controller.abort();
+    else externalSignal?.addEventListener('abort', abortFromCaller, { once: true });
+    const cleanup = () => {
+      clearTimeout(timer);
+      externalSignal?.removeEventListener('abort', abortFromCaller);
+    };
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -256,13 +264,19 @@ export function rpcdef(ctx) {
       // Keep the deadline active until the response body has been consumed.
       // fetch() resolves when headers arrive, while a slow or stalled body can
       // otherwise keep an RPC open indefinitely.
-      responseDeadlines.set(res, { timer, timedOut: () => timedOut });
+      responseDeadlines.set(res, {
+        cleanup,
+        externallyAborted: () => Boolean(externalSignal?.aborted),
+        timedOut: () => timedOut,
+      });
       return res;
     } catch (e) {
-      clearTimeout(timer);
-      if (timedOut || e?.name === 'TimeoutError' || e?.name === 'AbortError') {
+      cleanup();
+      if (timedOut || e?.name === 'TimeoutError') {
         throw errorWithCode('DEADLINE_EXCEEDED', `request timed out after ${timeoutMs}ms`);
       }
+      if (externalSignal?.aborted) throw errorWithCode('CANCELLED', 'request cancelled');
+      if (e?.name === 'AbortError') throw errorWithCode('DEADLINE_EXCEEDED', `request timed out after ${timeoutMs}ms`);
       throw errorWithCode('UNAVAILABLE', 'upstream request failed');
     }
   };
@@ -286,13 +300,15 @@ export function rpcdef(ctx) {
         throw errorWithCode('UNKNOWN', 'response is not valid JSON');
       }
     } catch (error) {
-      if (deadline?.timedOut() || error?.name === 'TimeoutError' || error?.name === 'AbortError') {
+      if (deadline?.timedOut() || error?.name === 'TimeoutError') {
         throw errorWithCode('DEADLINE_EXCEEDED', `request timed out after ${timeoutMs}ms`);
       }
+      if (deadline?.externallyAborted()) throw errorWithCode('CANCELLED', 'request cancelled');
+      if (error?.name === 'AbortError') throw errorWithCode('DEADLINE_EXCEEDED', `request timed out after ${timeoutMs}ms`);
       throw error;
     } finally {
       if (deadline) {
-        clearTimeout(deadline.timer);
+        deadline.cleanup();
         responseDeadlines.delete(res);
       }
     }
@@ -419,11 +435,23 @@ export function rpcdef(ctx) {
 
     logFlow('GetVulnSummary', { project_id: projectId });
     // DongTai 1.14.0 exposes type and severity summaries through two required
-    // endpoints. Execute them in sequence so a failed request cannot leave an
-    // orphan sibling request running. Failure of either endpoint fails the RPC
-    // because returning only one dimension would misrepresent the summary.
-    const typeJson = await fetchJsonDongtai(typeUrl, { method: 'GET', headers }, {});
-    const levelJson = await fetchJsonDongtai(levelUrl, { method: 'GET', headers }, {});
+    // endpoints. Run them concurrently under a shared cancellation scope. If
+    // either fails, abort and settle its sibling before preserving the original
+    // error; this keeps one timeout budget without leaking an orphan request.
+    const summaryController = new AbortController();
+    const requests = [
+      fetchJsonDongtai(typeUrl, { method: 'GET', headers, signal: summaryController.signal }, {}),
+      fetchJsonDongtai(levelUrl, { method: 'GET', headers, signal: summaryController.signal }, {}),
+    ];
+    let typeJson;
+    let levelJson;
+    try {
+      [typeJson, levelJson] = await Promise.all(requests);
+    } catch (error) {
+      summaryController.abort();
+      await Promise.allSettled(requests);
+      throw error;
+    }
 
     const levels = Array.isArray(levelJson?.data?.level)
       ? levelJson.data.level.map((item) => ({
