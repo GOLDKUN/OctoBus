@@ -170,6 +170,7 @@ test('logout tolerates empty 2xx body and maps upstream 5xx to UNAVAILABLE', asy
   primeSession(ctx2);
   withFetch(async () => fakeResponse(500, ''));
   await assert.rejects(() => rpcdef(ctx2)[LOGOUT_PATH]({ username: 'api_user' }), (e) => e.legacyCode === 'UNAVAILABLE');
+  assert.ok(_test.getSession(ctx2, 'https://fw:8443'), 'retryable logout failure must retain the session');
 });
 
 test('login caches session from set-cookie array and reuses for block', async () => {

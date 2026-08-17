@@ -547,8 +547,8 @@ const handleLogout = async (req, ctx) => {
     headers: { 'Content-Type': 'application/json', Cookie: session.cookie },
     body: JSON.stringify({ username }),
   });
-  clearSession(callCtx, host);
   throwForHttpStatus(callCtx, host, upstream.status);
+  clearSession(callCtx, host);
   const base = {
     http_status: Number(upstream.status),
     raw_body: '',
