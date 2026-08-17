@@ -130,9 +130,10 @@ const splitIpPort = (cell) => {
   const text = stripTags(cell); const index = text.lastIndexOf(':');
   return index <= 0 ? { ip: text, port: '' } : { ip: text.slice(0, index).trim(), port: text.slice(index + 1).trim() };
 };
-const hasEventTable = (html) => /<table\b[^>]*\bid\s*=\s*(["'])mytable\1[^>]*>/i.test(String(html));
+const extractMyTable = (html) => (String(html).match(/<table\b[^>]*\bid\s*=\s*(["'])mytable\1[^>]*>([\s\S]*?)<\/table>/i) ?? [])[2];
+const hasEventTable = (html) => extractMyTable(html) !== undefined;
 const hasEventDataRows = (html) => {
-  const table = (String(html).match(/<table\b[^>]*\bid\s*=\s*(["'])mytable\1[^>]*>([\s\S]*?)<\/table>/i) ?? [])[2] ?? '';
+  const table = extractMyTable(html) ?? '';
   const eventRowRe = /<tr\b(?=[^>]*\bclass\s*=\s*(["'])(?:even|odd)\1)[^>]*>/i;
   for (const row of table.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
     const cells = [...row[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((cell) => cell[1]);
@@ -146,8 +147,9 @@ const hasEventDataRows = (html) => {
 };
 const parseEventList = (html, limit = 0) => {
   const entries = [];
+  const table = extractMyTable(html) ?? '';
   const rowRe = /<tr\b(?=[^>]*\bclass\s*=\s*(["'])(?:even|odd)\1)[^>]*>([\s\S]*?)<\/tr>/gi;
-  for (const match of String(html).matchAll(rowRe)) {
+  for (const match of table.matchAll(rowRe)) {
     const cells = [...match[2].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((cell) => cell[1]);
     if (cells.length < 5) continue;
     const time = stripTags(cells[1]);
@@ -240,4 +242,4 @@ export function rpcdef(ctx = {}) {
   return { [QUERY_EVENT_LIST_PATH]: async (req) => runQueryEventList(req ?? callCtx.req, callCtx) };
 }
 export const handlers = { [METHOD_QUERY_EVENT_LIST_FULL]: (ctx = {}) => runQueryEventList(requestFromContext(ctx), ctx) };
-export const _test = { attrTitles, buildHeaders, buildTlsOptions, decodeEntities, decodeResponseBytes, errorWithCode, grpcCodeFor, hasEventDataRows, hasEventTable, hasOwn, normalizeBaseUrl, parseEventList, pickBoolean, pickFirstBoolean, pickFirstString, pickInt, pickStringFrom, readBoundedText, requestFromContext, requireBindings, resolveCallContext, resolveCookie, resolveHost, resolveMaxResponseBytes, resolveTimeoutMs, responseCharset, sanitizeHeaders, splitIpPort, stripTags, throwForHttpStatus, unwrapScalar };
+export const _test = { attrTitles, buildHeaders, buildTlsOptions, decodeEntities, decodeResponseBytes, errorWithCode, extractMyTable, grpcCodeFor, hasEventDataRows, hasEventTable, hasOwn, normalizeBaseUrl, parseEventList, pickBoolean, pickFirstBoolean, pickFirstString, pickInt, pickStringFrom, readBoundedText, requestFromContext, requireBindings, resolveCallContext, resolveCookie, resolveHost, resolveMaxResponseBytes, resolveTimeoutMs, responseCharset, sanitizeHeaders, splitIpPort, stripTags, throwForHttpStatus, unwrapScalar };

@@ -158,10 +158,11 @@ test('helper coverage', () => {
     + `<td><a>[123]&nbsp;测试事件</a></td>`
     + `<td>${withProxy ? '<img title="代理IP">&nbsp;' : ''}1.1.1.1:11</td>`
     + '<td>2.2.2.2:22</td><td>u1</td><td>a1</td></tr>';
-  const html = '<tr class="first_title"><th>x</th></tr>'
+  const html = '<table id="mytable"><tr class="first_title"><th>x</th></tr>'
     + mkRow('even', '2026-01-02 03:04:05', false)
     + mkRow('odd', 'not-a-time', false)
-    + mkRow('even', '2026-01-02 03:04:06', true, 'data-row="two"');
+    + mkRow('even', '2026-01-02 03:04:06', true, 'data-row="two"')
+    + '</table>';
   const parsed = h.parseEventList(html);
   assert.equal(parsed.length, 2);
   assert.equal(parsed[0].severity, '高');
@@ -172,8 +173,9 @@ test('helper coverage', () => {
   assert.equal(parsed[1].src_ip, '1.1.1.1'); // proxy img stripped
   assert.equal(h.parseEventList(html, 1).length, 1);
   // anchor without [id] pattern falls back to raw text as name
-  const noId = '<tr class="even"><td><img title="低危险程度"></td><td>2026-01-02 03:04:05</td><td><a>纯文本事件</a></td><td>1.1.1.1:1</td><td>2.2.2.2:2</td></tr>';
+  const noId = '<table id="mytable"><tr class="even"><td><img title="低危险程度"></td><td>2026-01-02 03:04:05</td><td><a>纯文本事件</a></td><td>1.1.1.1:1</td><td>2.2.2.2:2</td></tr></table>';
   assert.equal(h.parseEventList(noId)[0].event_name, '纯文本事件');
+  assert.equal(h.extractMyTable('<table id="mytable">inside</table>'), 'inside');
 
   assert.equal(h.pickInt({ a: '5' }, ['a'], 0), 5);
   assert.equal(h.pickInt({ a: '' }, ['a'], 9), 9);
@@ -288,6 +290,23 @@ test('rejects drifted event rows when time moves or an event class remains', asy
   await assert.rejects(() => callHandler(ctx), (e) => e.legacyCode === 'FAILED_PRECONDITION');
   withFetch(async () => fakeResponse(200, '<table id="mytable"><tr class="even"><td>unexpected layout</td></tr></table>'));
   await assert.rejects(() => callHandler(ctx), (e) => e.legacyCode === 'FAILED_PRECONDITION');
+});
+
+test('only parses and validates rows inside table#mytable', async () => {
+  const outside = '<tr class="even"><td><img title="高危险程度"></td><td>2026-01-02 03:04:05</td><td><a>[999] outside</a></td><td>192.0.2.1:1</td><td>192.0.2.2:2</td></tr>';
+  const inside = '<tr class="even"><td><img title="低危险程度"><img title="允许"></td><td>2026-01-02 03:04:06</td><td><a>[123] inside</a></td><td>192.0.2.3:3</td><td>192.0.2.4:4</td></tr>';
+  const ctx = buildCtx({ host: 'https://ids', cookie: 'secret-cookie' });
+  withFetch(async () => fakeResponse(200, `${outside}<table id="mytable">${inside}</table>${outside}`));
+  const out = await callHandler(ctx);
+  assert.equal(out.total, 1);
+  assert.equal(out.entries[0].event_id, '123');
+
+  // Rows elsewhere on the page must neither be parsed nor make an empty
+  // event table look like a drifted event layout.
+  withFetch(async () => fakeResponse(200, `${outside}<table id="mytable"></table>${outside}`));
+  const empty = await callHandler(ctx);
+  assert.equal(empty.total, 0);
+  assert.deepEqual(empty.entries, []);
 });
 
 test('maps HTTP status before reading an oversized error page', async () => {
