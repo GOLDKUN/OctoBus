@@ -195,6 +195,7 @@ export function rpcdef(ctx) {
   });
 
   const tlsOptions = () => (skipTlsVerify ? { dispatcher: getInsecureTlsDispatcher() } : {});
+  const responseDeadlines = new WeakMap();
 
   const pageOrDefault = (value, field, fallback, maximum) => {
     if (value === undefined || value === null || value === '' || Number(value) === 0) return fallback;
@@ -251,14 +252,18 @@ export function rpcdef(ctx) {
       controller.abort();
     }, timeoutMs);
     try {
-      return await fetch(url, { ...init, signal: controller.signal, redirect: 'error', ...tlsOptions() });
+      const res = await fetch(url, { ...init, signal: controller.signal, redirect: 'error', ...tlsOptions() });
+      // Keep the deadline active until the response body has been consumed.
+      // fetch() resolves when headers arrive, while a slow or stalled body can
+      // otherwise keep an RPC open indefinitely.
+      responseDeadlines.set(res, { timer, timedOut: () => timedOut });
+      return res;
     } catch (e) {
+      clearTimeout(timer);
       if (timedOut || e?.name === 'TimeoutError' || e?.name === 'AbortError') {
         throw errorWithCode('DEADLINE_EXCEEDED', `request timed out after ${timeoutMs}ms`);
       }
       throw errorWithCode('UNAVAILABLE', 'upstream request failed');
-    } finally {
-      clearTimeout(timer);
     }
   };
 
@@ -272,12 +277,30 @@ export function rpcdef(ctx) {
   };
 
   const readJsonResponse = async (res, emptyValue) => {
-    const text = await readResponseText(res);
-    if (!res.ok) throwForHttpError(res.status);
-    if (!text.trim()) return emptyValue;
-    try { return JSON.parse(text); } catch {
-      throw errorWithCode('UNKNOWN', 'response is not valid JSON');
+    const deadline = responseDeadlines.get(res);
+    try {
+      const text = await readResponseText(res);
+      if (!res.ok) throwForHttpError(res.status);
+      if (!text.trim()) return emptyValue;
+      try { return JSON.parse(text); } catch {
+        throw errorWithCode('UNKNOWN', 'response is not valid JSON');
+      }
+    } catch (error) {
+      if (deadline?.timedOut() || error?.name === 'TimeoutError' || error?.name === 'AbortError') {
+        throw errorWithCode('DEADLINE_EXCEEDED', `request timed out after ${timeoutMs}ms`);
+      }
+      throw error;
+    } finally {
+      if (deadline) {
+        clearTimeout(deadline.timer);
+        responseDeadlines.delete(res);
+      }
     }
+  };
+
+  const fetchJsonDongtai = async (url, init, emptyValue) => {
+    const res = await fetchDongtai(url, init);
+    return readJsonResponse(res, emptyValue);
   };
 
   const requireToken = (req) => {
@@ -389,23 +412,29 @@ export function rpcdef(ctx) {
     const projectId = toPositiveInt(firstDefined(req?.project_id, req?.projectId));
     if (projectId !== null) params.push(`project_id=${projectId}`);
 
-    const url = `${base}/api/v1/vuln/summary_type${params.length ? `?${params.join('&')}` : ''}`;
+    const query = params.length ? `?${params.join('&')}` : '';
+    const typeUrl = `${base}/api/v1/vuln/summary_type${query}`;
+    const levelUrl = `${base}/api/v1/vuln/summary_level${query}`;
     const headers = buildHeaders(token);
 
-    logFlow('GetVulnSummary', {});
-    const res = await fetchDongtai(url, { method: 'GET', headers });
-    const json = await readJsonResponse(res, {});
+    logFlow('GetVulnSummary', { project_id: projectId });
+    // DongTai 1.14.0 exposes type and severity summaries through distinct
+    // endpoints. Fetch both rather than relying on a synthetic combined mock.
+    const [typeJson, levelJson] = await Promise.all([
+      fetchJsonDongtai(typeUrl, { method: 'GET', headers }, {}),
+      fetchJsonDongtai(levelUrl, { method: 'GET', headers }, {}),
+    ]);
 
-    const levels = Array.isArray(json?.data?.level)
-      ? json.data.level.map((item) => ({
+    const levels = Array.isArray(levelJson?.data?.level)
+      ? levelJson.data.level.map((item) => ({
           level: String(item?.level ?? ''),
           level_id: Number(item?.level_id ?? 0),
           count: Number(item?.count ?? 0),
         }))
       : [];
 
-    const types = Array.isArray(json?.data?.type)
-      ? json.data.type.map((item) => ({
+    const types = Array.isArray(typeJson?.data?.type)
+      ? typeJson.data.type.map((item) => ({
           // DongTai 1.14.0 VulSummaryType emits `type`, not `vul_type`.
           vul_type: String(item?.type ?? item?.vul_type ?? ''),
           count: Number(item?.count ?? 0),

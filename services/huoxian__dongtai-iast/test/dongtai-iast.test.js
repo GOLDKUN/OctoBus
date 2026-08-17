@@ -143,6 +143,7 @@ function createMockResponse(data, status = 200) {
 
 describe('API Method Tests (Mock)', () => {
   let originalFetch;
+  const summaryRequests = [];
 
   before(() => {
     originalFetch = globalThis.fetch;
@@ -182,13 +183,21 @@ describe('API Method Tests (Mock)', () => {
       }
       // GetVulnSummary
       if (urlStr.includes('/api/v1/vuln/summary_type') && method === 'GET') {
+        summaryRequests.push(urlStr);
         return createMockResponse({
           status: 201,
           data: {
-            level: [{ level: '高危', level_id: 1, count: 5 }],
             // Exact DongTai 1.14.0 VulSummaryType response keys.
             type: [{ type: 'sql_injection', count: 3 }],
           },
+        });
+      }
+      if (urlStr.includes('/api/v1/vuln/summary_level') && method === 'GET') {
+        summaryRequests.push(urlStr);
+        return createMockResponse({
+          status: 201,
+          // Exact DongTai 1.14.0 VulSummaryLevel response keys.
+          data: { level: [{ level: '高危', level_id: 1, count: 5 }] },
         });
       }
       // ListProjects
@@ -292,11 +301,16 @@ describe('API Method Tests (Mock)', () => {
 
   it('GetVulnSummary should return summary stats', async () => {
     const handler = handlers[METHOD_GET_VULN_SUMMARY_FULL];
-    const result = await handler(makeCtx());
+    summaryRequests.length = 0;
+    const result = await handler(makeCtx({ project_id: 7 }));
     assert.ok(Array.isArray(result.levels));
     assert.ok(Array.isArray(result.types));
     assert.equal(result.levels[0].level, '高危');
     assert.equal(result.types[0].vul_type, 'sql_injection');
+    assert.deepEqual(summaryRequests.sort(), [
+      `${MOCK_BASE_URL}/api/v1/vuln/summary_level?project_id=7`,
+      `${MOCK_BASE_URL}/api/v1/vuln/summary_type?project_id=7`,
+    ]);
   });
 
   it('ListProjects should return projects list', async () => {
@@ -477,6 +491,24 @@ describe('Error Handling', () => {
     );
   });
 
+  it('keeps the deadline active while reading a slow response body', async () => {
+    globalThis.fetch = mock.fn(async (_url, init) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => {
+          reject(Object.assign(new Error('body aborted'), { name: 'AbortError' }));
+        }, { once: true });
+      }),
+    }));
+
+    await assert.rejects(
+      () => handlers[METHOD_LIST_VULNS_FULL](makeCtx({}, { limits: { timeoutMs: 5 } })),
+      (err) => err.message.includes('DEADLINE_EXCEEDED'),
+    );
+  });
+
   it('uses an undici dispatcher only when TLS verification is explicitly disabled', async () => {
     globalThis.fetch = mock.fn(async () => createMockResponse({ status: 201, data: [], page: {} }));
     await handlers[METHOD_LIST_VULNS_FULL]({
@@ -580,7 +612,9 @@ describe('Error Handling', () => {
     for (const [method, request] of calls) {
       await handlers[method](makeCtx(request));
     }
-    assert.equal(globalThis.fetch.mock.callCount(), calls.length);
+    // GetVulnSummary makes one request for summary_type and one for
+    // summary_level; every other RPC makes a single upstream request.
+    assert.equal(globalThis.fetch.mock.callCount(), calls.length + 1);
   });
 
   it('rejects CRLF token injection and clamps an excessive timeout', async () => {
