@@ -9,6 +9,7 @@ const MOVE = `${PKG}/MoveSecPolicyPriority`;
 const LOGOUT = `${PKG}/Logout`;
 
 const HOST = 'https://1.1.1.1:8080';
+const originalFetch = global.fetch;
 
 const makeRes = (status, bodyObj, setCookies = []) => ({
   status,
@@ -33,10 +34,23 @@ const ctx = (overrides = {}) => ({
   meta: { instance_id: overrides.instance_id || 'inst-1' },
 });
 
-const loadMod = () => import('../src/qianxin-fw-secgate3600-policy.js');
+// Existing request-shape tests share this adapter. Production handlers receive
+// one SDK 0.6 call context; the dedicated test below verifies that contract.
+const loadMod = async () => {
+  const mod = await import('../src/qianxin-fw-secgate3600-policy.js');
+  return {
+    ...mod,
+    handlers: Object.fromEntries(Object.entries(mod.handlers).map(([method, handler]) => [
+      method,
+      (request = {}, callCtx = {}) => handler({ ...callCtx, request }),
+    ])),
+  };
+};
 
 const loginOk = makeRes(200, { success: true, result: { error_code: 'success', token: 'tok-1' } }, ['PHPSESSID=abc123; path=/']);
 const restOk = (data, head = {}) => makeRes(200, { head: { error_code: 0, error_string: '执行成功', total: 1, ...head }, data });
+
+test.after(() => { global.fetch = originalFetch; });
 
 async function doLogin(mod, c) {
   setFetch(() => loginOk);
@@ -82,7 +96,9 @@ test('Login caches session', async () => {
   const c = ctx();
   const res = await doLogin(mod, c);
   assert.equal(res.success, true);
-  assert.equal(res.result.token, 'tok-1');
+  assert.equal(res.result.token, '');
+  assert.equal(res.raw_body, '');
+  assert.equal(res.raw_json, undefined);
   assert.match(lastReq.url, /\/v1\.0\/login$/);
   assert.deepEqual(lastReq.body, { username: 'admin', password: 'pw' });
   const session = mod._test.getSession({ ...c, bindings: c.bindings }, HOST);
@@ -205,7 +221,7 @@ test('infrastructure helpers cover edge branches', async () => {
 
   // buildTlsOptions
   assert.deepEqual(_test.buildTlsOptions({}), {});
-  assert.equal(_test.buildTlsOptions({ skipTlsVerify: true }).skipTlsVerify, true);
+  assert.ok(_test.buildTlsOptions({ skipTlsVerify: true }).dispatcher);
 
   // getSetCookies: getSetCookie path, get fallback, none
   assert.deepEqual(_test.getSetCookies({ headers: { getSetCookie: () => ['a=1'] } }), ['a=1']);
@@ -242,7 +258,9 @@ test('skipTlsVerify + IPv6 host flow through to fetch init', async () => {
   const c = { bindings: { host: 'https://[::1]:8443', user: 'u', password: 'p', skipTlsVerify: true }, meta: { instance_id: 'inst-tls' } };
   setFetch(() => loginOk);
   await mod.handlers[LOGIN]({}, c);
-  assert.equal(lastReq.init.skipTlsVerify, true);
+  assert.ok(lastReq.init.dispatcher);
+  assert.ok(lastReq.init.signal);
+  assert.equal(lastReq.init.redirect, 'error');
   assert.match(lastReq.url, /^https:\/\/\[::1\]:8443\/v1\.0\/login$/);
 });
 
@@ -298,7 +316,7 @@ test('logout empty-body branches and toValue fallback', async () => {
   setFetch(() => loginOk);
   await mod.handlers[LOGIN]({}, c);
   setFetch(() => makeRes(500, ''));
-  await assert.rejects(mod.handlers[LOGOUT]({}, c), /UNKNOWN.*response body is empty/);
+  await assert.rejects(mod.handlers[LOGOUT]({}, c), /UNAVAILABLE.*HTTP 500/);
 });
 
 test('rpcdef exposes all five method paths', async () => {
@@ -454,14 +472,14 @@ test('resolveTimeoutMs with timeout_ms key and invalid value', async () => {
   const c = { bindings: { host: HOST, user: 'u', password: 'p', timeout_ms: 4000 }, meta: { instance_id: 'inst-tms' } };
   setFetch((url, init) => { lastReq = { url, init }; return loginOk; });
   await mod.handlers[LOGIN]({}, c);
-  assert.equal(lastReq.init.timeoutMs, 4000);
+  assert.ok(lastReq.init.signal);
 
   // invalid timeout falls back to default
   const c2 = { bindings: { host: HOST, user: 'u', password: 'p', timeoutMs: -1 }, meta: { instance_id: 'inst-bad-tms' } };
   mod._test.sessionCache.clear();
   setFetch((url, init) => { lastReq = { url, init }; return loginOk; });
   await mod.handlers[LOGIN]({}, c2);
-  assert.equal(lastReq.init.timeoutMs, 5000);
+  assert.ok(lastReq.init.signal);
 });
 
 test('toBoolean: false/0/unknown-string branches and normalizeListNames wrapped null', async () => {
@@ -507,8 +525,8 @@ test('extractHeaders without forEach and toLoginResponse with non-object result'
 
 test('buildTlsOptions: tlsInsecureSkipVerify and insecureSkipVerify also trigger', async () => {
   const { _test } = await loadMod();
-  assert.equal(_test.buildTlsOptions({ tlsInsecureSkipVerify: true }).skipTlsVerify, true);
-  assert.equal(_test.buildTlsOptions({ insecureSkipVerify: true }).skipTlsVerify, true);
+  assert.ok(_test.buildTlsOptions({ tlsInsecureSkipVerify: true }).dispatcher);
+  assert.ok(_test.buildTlsOptions({ insecureSkipVerify: true }).dispatcher);
 });
 
 test('requireHost: binding fallbacks restBaseUrl and baseUrl', async () => {
@@ -534,5 +552,140 @@ test('resolveCallContext: ctx.req fallback and limits.timeoutMs', async () => {
   };
   setFetch((url, init) => { lastReq = { url, init }; return loginOk; });
   await mod.handlers[LOGIN]({}, c);
-  assert.equal(lastReq.init.timeoutMs, 3000);
+  assert.ok(lastReq.init.signal);
+});
+
+test('SDK 0.6 handlers take one call context and never reflect credentials', async () => {
+  const mod = await import('../src/qianxin-fw-secgate3600-policy.js');
+  mod._test.clearAllSessions();
+  setFetch(() => makeRes(200, {
+    success: true,
+    result: { error_code: 'success', token: 'must-not-leak', password: 'must-not-leak' },
+  }, ['PHPSESSID=must-not-leak']));
+
+  const result = await mod.handlers[LOGIN]({ ...ctx(), request: {} });
+  assert.equal(result.success, true);
+  assert.equal(result.result.token, '');
+  assert.equal(result.raw_body, '');
+  assert.equal(result.raw_json, undefined);
+  assert.deepEqual(result.headers, [{ key: 'content-type', values: ['application/json'] }]);
+});
+
+test('session cache is per-instance, TTL-bound, and LRU-bounded', async () => {
+  const mod = await import('../src/qianxin-fw-secgate3600-policy.js');
+  const { _test } = mod;
+  _test.clearAllSessions();
+  const oldNow = Date.now;
+  let now = 1_000;
+  Date.now = () => now;
+  try {
+    const first = { meta: { instance_id: 'one' } };
+    const second = { meta: { instance_id: 'two' } };
+    _test.setSession(first, HOST, { token: 'one', cookie: 'one' });
+    _test.setSession(second, HOST, { token: 'two', cookie: 'two' });
+    assert.equal(_test.getSession(first, HOST).token, 'one');
+    assert.equal(_test.getSession(second, HOST).token, 'two');
+    now += 30 * 60 * 1000 + 1;
+    assert.equal(_test.getSession(first, HOST), undefined);
+
+    for (let index = 0; index <= 8; index += 1) {
+      _test.setSession(second, `https://192.0.2.${index}:8443`, { token: String(index), cookie: String(index) });
+    }
+    assert.equal(_test.getInstanceSessionMap(second).size, 8);
+    assert.equal(_test.getSession(second, 'https://192.0.2.0:8443'), undefined);
+  } finally {
+    Date.now = oldNow;
+    _test.clearAllSessions();
+  }
+});
+
+test('transport rejects oversized responses, redacts failures, and maps 5xx', async () => {
+  const mod = await import('../src/qianxin-fw-secgate3600-policy.js');
+  const { _test } = mod;
+  await assert.rejects(
+    _test.readResponseText({ headers: { get: () => '1048577' } }, 1024),
+    /RESOURCE_EXHAUSTED/,
+  );
+  assert.equal(_test.redactSensitiveText('https://admin:pw@example.test/?token=abc&password=def'), 'https://[REDACTED]@example.test/?token=[REDACTED]&password=[REDACTED]');
+  setFetch(() => makeRes(503, { password: 'not-returned' }));
+  await assert.rejects(_test.fetchUpstream(ctx(), `${HOST}/v1.0/login`), /UNAVAILABLE.*HTTP 503/);
+});
+
+test('response streaming bounds and non-5xx empty logout errors are deterministic', async () => {
+  const mod = await import('../src/qianxin-fw-secgate3600-policy.js');
+  const { _test } = mod;
+  const streamResponse = (chunks) => ({
+    headers: { get: () => null },
+    body: (async function* stream() { for (const chunk of chunks) yield chunk; })(),
+  });
+  assert.equal(await _test.readResponseText(streamResponse(['a', Buffer.from('bc')]), 3), 'abc');
+  await assert.rejects(_test.readResponseText(streamResponse(['ab', 'cd']), 3), /RESOURCE_EXHAUSTED/);
+  await assert.rejects(_test.readResponseText({ headers: { get: () => null }, text: async () => 'toolong' }, 3), /RESOURCE_EXHAUSTED/);
+
+  mod._test.clearAllSessions();
+  const c = ctx({ instance_id: 'empty-logout' });
+  await doLogin(await loadMod(), c);
+  setFetch(() => makeRes(400, ''));
+  const adapted = await loadMod();
+  await assert.rejects(adapted.handlers[LOGOUT]({}, c), /UNKNOWN.*response body is empty/);
+});
+
+test('cache and response hardening helpers cover bounded edge cases', async () => {
+  const { _test } = await import('../src/qianxin-fw-secgate3600-policy.js');
+  _test.clearAllSessions();
+  try {
+    assert.equal(_test.getSession({ meta: { instance_id: 'missing' } }, HOST), undefined);
+    assert.equal(_test.resolveMaxResponseBytes({ bindings: { maxResponseBytes: 9 * 1024 * 1024 } }), 5 * 1024 * 1024);
+    assert.equal(_test.resolveMaxResponseBytes({ bindings: { max_response_bytes: -1 } }), 1024 * 1024);
+    assert.deepEqual(_test.redactSensitiveObject({ token: 'x', nested: [{ password: 'y' }, { safe: true }] }), {
+      token: '[REDACTED]', nested: [{ password: '[REDACTED]' }, { safe: true }],
+    });
+    const headers = _test.extractHeaders({
+      headers: {
+        forEach(callback) {
+          callback('visible', 'x-visible');
+          callback('session=value', 'set-cookie');
+          callback('Bearer secret', 'authorization');
+        },
+        getSetCookie: () => ['session=value'],
+      },
+    });
+    assert.deepEqual(headers, [{ key: 'x-visible', values: ['visible'] }]);
+
+    for (let index = 0; index <= 128; index += 1) {
+      _test.setSession({ meta: { instance_id: `instance-${index}` } }, HOST, { token: 't', cookie: 'c' });
+    }
+    assert.equal(_test.sessionCache.size, 128);
+    assert.equal(_test.sessionCache.has('instance-0'), false);
+  } finally {
+    _test.clearAllSessions();
+  }
+});
+
+test('remaining nullish and fallback branches remain safe', async () => {
+  const { _test, rpcdef } = await import('../src/qianxin-fw-secgate3600-policy.js');
+  assert.match(_test.errorWithCode('not-known', 'safe').message, /not-known: safe/);
+  assert.equal(_test.toTrimmedString(undefined), '');
+  assert.equal(_test.toTrimmedString({ value: ' wrapped ' }), 'wrapped');
+  assert.equal(_test.requestFromContext({ req: { name: 'req' } }).name, 'req');
+  assert.deepEqual(_test.requestFromContext({}), {});
+  assert.deepEqual(_test.resolveCallContext({ request: { name: 'request' } }).req, { name: 'request' });
+  assert.equal(_test.parseAuthority(''), null);
+  assert.equal(_test.parseAuthority('[]:443'), null);
+  assert.equal(_test.parseAuthority('[::1]:x'), null);
+  assert.equal(_test.normalizeBaseUrl('https://host:443?query=1'), '');
+  assert.equal(_test.redactSensitiveText(null), '');
+  assert.equal(await _test.readResponseText({ headers: { get: () => null }, text: async () => '' }, 1), '');
+  assert.equal(_test.mergeCookieHeader(undefined, undefined), '');
+  assert.equal(_test.mergeCookieHeader(['k=v'], undefined), 'k=v');
+  assert.throws(() => _test.normalizePolicies({}), /non-empty/);
+  assert.throws(() => _test.normalizeMoves({ moves: [null] }), /name is required/);
+  assert.equal(_test.toRestResponse(200, undefined, { headers: { forEach() {}, getSetCookie: () => [] } }, {}).head.total, 0);
+  assert.equal(_test.toLogoutResponse(200, undefined, { headers: { forEach() {}, getSetCookie: () => [] } }).raw_body, '');
+
+  const c = ctx({ instance_id: 'rpcdef-nullish' });
+  const def = rpcdef(c);
+  for (const method of [LOGIN, LIST, SET, MOVE, LOGOUT]) {
+    assert.equal(typeof def[`/${method}`], 'function');
+  }
 });

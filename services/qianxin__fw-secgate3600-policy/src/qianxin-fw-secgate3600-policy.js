@@ -1,4 +1,5 @@
 import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
+import { Agent } from 'undici';
 
 const PKG = 'QIANXIN_FW_SecGate3600_Policy.QIANXIN_FW_SecGate3600_Policy';
 export const LOGIN_PATH = `/${PKG}/Login`;
@@ -22,12 +23,18 @@ export const FN_SET = 'set_sec_policy';
 export const FN_MOVE = 'set_move_sec_policy_pri';
 export const MOVE_DIRECTS = ['top', 'end', 'before', 'after'];
 export const DEFAULT_TIMEOUT_MS = 5000;
+export const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
+export const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+export const SESSION_TTL_MS = 30 * 60 * 1000;
+export const MAX_SESSION_INSTANCES = 128;
+export const MAX_SESSIONS_PER_INSTANCE = 8;
 
 const sessionCache = new Map();
 
 const grpcCodeFor = (code) => ({
   FAILED_PRECONDITION: grpcStatus.FAILED_PRECONDITION,
   INVALID_ARGUMENT: grpcStatus.INVALID_ARGUMENT,
+  RESOURCE_EXHAUSTED: grpcStatus.RESOURCE_EXHAUSTED,
   UNAVAILABLE: grpcStatus.UNAVAILABLE,
   UNKNOWN: grpcStatus.UNKNOWN,
 })[code] ?? grpcStatus.UNKNOWN;
@@ -73,11 +80,13 @@ const resolveCallContext = (ctx = {}) => ({
   req: ctx.req ?? ctx.request ?? {},
 });
 
+const requestFromContext = (ctx = {}) => ctx.request ?? ctx.req ?? {};
+
 const parseAuthority = (authority) => {
   if (!authority) return null;
   if (authority.startsWith('[')) {
     const closeIndex = authority.indexOf(']');
-    if (closeIndex <= 0) return null;
+    if (closeIndex <= 1) return null;
     const hostPart = authority.slice(0, closeIndex + 1);
     const rest = authority.slice(closeIndex + 1);
     if (!rest.startsWith(':')) return null;
@@ -127,6 +136,13 @@ const resolveTimeoutMs = (ctx) => {
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
 };
 
+const resolveMaxResponseBytes = (ctx) => {
+  const bindings = mergedBindings(ctx);
+  const raw = Number(firstDefined(ctx?.limits?.maxResponseBytes, bindings.maxResponseBytes, bindings.max_response_bytes, DEFAULT_MAX_RESPONSE_BYTES));
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_MAX_RESPONSE_BYTES;
+  return Math.min(Math.trunc(raw), MAX_RESPONSE_BYTES);
+};
+
 const toBoolean = (value) => {
   const raw = unwrapScalar(value);
   if (typeof raw === 'boolean') return raw;
@@ -139,13 +155,16 @@ const toBoolean = (value) => {
   return false;
 };
 
+let insecureTlsDispatcher;
+
+const getInsecureTlsDispatcher = () => {
+  insecureTlsDispatcher ??= new Agent({ connect: { rejectUnauthorized: false } });
+  return insecureTlsDispatcher;
+};
+
 const buildTlsOptions = (bindings) => {
   if (!toBoolean(bindings?.skipTlsVerify) && !toBoolean(bindings?.tlsInsecureSkipVerify) && !toBoolean(bindings?.insecureSkipVerify)) return {};
-  return {
-    skipTlsVerify: true,
-    tlsInsecureSkipVerify: true,
-    insecureSkipVerify: true,
-  };
+  return { dispatcher: getInsecureTlsDispatcher() };
 };
 
 const buildHeaders = (ctx, extra = {}) => ({
@@ -155,19 +174,48 @@ const buildHeaders = (ctx, extra = {}) => ({
 
 const getInstanceKey = (ctx) => String(ctx?.meta?.instance_id || ctx?.meta?.instanceId || 'default');
 
-const getInstanceSessionMap = (ctx) => {
+const getInstanceSessionMap = (ctx, create = false) => {
   const key = getInstanceKey(ctx);
   let map = sessionCache.get(key);
-  if (!map) {
+  if (map) {
+    // Touch the instance entry so the outer map is an LRU rather than a FIFO.
+    sessionCache.delete(key);
+    sessionCache.set(key, map);
+  } else if (create) {
+    while (sessionCache.size >= MAX_SESSION_INSTANCES) sessionCache.delete(sessionCache.keys().next().value);
     map = new Map();
     sessionCache.set(key, map);
   }
   return map;
 };
 
-const getSession = (ctx, host) => getInstanceSessionMap(ctx).get(host);
-const setSession = (ctx, host, session) => getInstanceSessionMap(ctx).set(host, session);
-const clearSession = (ctx, host) => getInstanceSessionMap(ctx).delete(host);
+const getSession = (ctx, host) => {
+  const map = getInstanceSessionMap(ctx);
+  const session = map?.get(host);
+  if (!session) return undefined;
+  if (session.expires_at_ms <= Date.now()) {
+    map.delete(host);
+    return undefined;
+  }
+  // Touch the host entry to preserve LRU ordering.
+  map.delete(host);
+  map.set(host, session);
+  return session;
+};
+
+const setSession = (ctx, host, session) => {
+  const map = getInstanceSessionMap(ctx, true);
+  map.delete(host);
+  map.set(host, { ...session, expires_at_ms: Date.now() + SESSION_TTL_MS });
+  while (map.size > MAX_SESSIONS_PER_INSTANCE) map.delete(map.keys().next().value);
+};
+
+const clearSession = (ctx, host) => {
+  const map = getInstanceSessionMap(ctx);
+  map?.delete(host);
+};
+
+const clearAllSessions = () => sessionCache.clear();
 
 const requireSession = (ctx, host) => {
   const session = getSession(ctx, host);
@@ -200,22 +248,52 @@ const toValue = (val) => {
   return { stringValue: String(raw) };
 };
 
+const redactSensitiveText = (value) => String(value ?? '')
+  .replace(/(password|token|cookie|authorization)=([^\s&;,]+)/gi, '$1=[REDACTED]')
+  .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1[REDACTED]@');
+
+const readResponseText = async (response, maxBytes) => {
+  const declaredLength = Number(response?.headers?.get?.('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw errorWithCode('RESOURCE_EXHAUSTED', `response exceeds ${maxBytes} byte limit`);
+  }
+  if (response?.body?.[Symbol.asyncIterator]) {
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of response.body) {
+      const buffer = Buffer.from(chunk);
+      size += buffer.length;
+      if (size > maxBytes) throw errorWithCode('RESOURCE_EXHAUSTED', `response exceeds ${maxBytes} byte limit`);
+      chunks.push(buffer);
+    }
+    return Buffer.concat(chunks).toString();
+  }
+  const text = await response.text();
+  if (Buffer.byteLength(String(text ?? '')) > maxBytes) {
+    throw errorWithCode('RESOURCE_EXHAUSTED', `response exceeds ${maxBytes} byte limit`);
+  }
+  return String(text ?? '');
+};
+
 const fetchUpstream = async (ctx, url, init = {}) => {
   try {
     const response = await fetch(url, {
-      timeoutMs: resolveTimeoutMs(ctx),
       ...buildTlsOptions(ctx?.bindings || {}),
       ...init,
+      redirect: 'error',
+      signal: AbortSignal.timeout(resolveTimeoutMs(ctx)),
       headers: buildHeaders(ctx, init.headers || {}),
     });
-    const text = await response.text();
+    const text = await readResponseText(response, resolveMaxResponseBytes(ctx));
+    if (response.status >= 500) throw errorWithCode('UNAVAILABLE', `upstream returned HTTP ${response.status}`);
     return {
       status: Number(response.status),
       text: String(text ?? ''),
       res: response,
     };
   } catch (err) {
-    throw errorWithCode('UNAVAILABLE', err?.cause?.message || err?.message || 'fetch failed');
+    if (err instanceof GrpcError) throw err;
+    throw errorWithCode('UNAVAILABLE', redactSensitiveText(err?.cause?.message || err?.message || 'fetch failed'));
   }
 };
 
@@ -233,6 +311,15 @@ const requireJsonBody = (text) => {
 };
 
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const redactSensitiveObject = (value) => {
+  if (Array.isArray(value)) return value.map(redactSensitiveObject);
+  if (!isPlainObject(value)) return value;
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [
+    key,
+    /password|token|cookie|authorization|secret/i.test(key) ? '[REDACTED]' : redactSensitiveObject(child),
+  ]));
+};
 
 const validateLoginJson = (json) => {
   if (!isPlainObject(json) || typeof json.success !== 'boolean' || !isPlainObject(json.result)) {
@@ -286,8 +373,8 @@ const extractHeaders = (res) => {
       map.set(lower, existing);
     });
   }
-  const setCookies = getSetCookies(res);
-  if (setCookies.length > 0) map.set('set-cookie', setCookies.map((value) => String(value ?? '')));
+  // Session and authorization material must never be reflected to callers.
+  for (const key of ['set-cookie', 'cookie', 'authorization', 'proxy-authorization']) map.delete(key);
   return Array.from(map.entries()).map(([key, values]) => ({ key, values }));
 };
 
@@ -372,12 +459,12 @@ const toLoginResponse = (status, text, res, json) => {
     success: json?.success === true,
     result: {
       error_code: toTrimmedString(resultObject.error_code),
-      token: toTrimmedString(resultObject.token),
-      raw: toValue(resultObject),
+      token: '',
+      raw: undefined,
     },
     http_status: Number(status),
-    raw_body: String(text ?? ''),
-    raw_json: toValue(json),
+    raw_body: '',
+    raw_json: undefined,
     headers: extractHeaders(res),
   };
 };
@@ -389,18 +476,18 @@ const toRestResponse = (status, text, res, json) => {
       error_code: toInt64(head.error_code, 0),
       message: toTrimmedString(firstDefined(head.error_string, head.message, head.error_message, head.errmsg)),
       total: toInt64(head.total, 0),
-      raw: toValue(head),
+      raw: toValue(redactSensitiveObject(head)),
     },
-    data: toValue(firstDefined(json?.data, json?.body)),
+    data: toValue(redactSensitiveObject(firstDefined(json?.data, json?.body))),
     http_status: Number(status),
-    raw_body: String(text ?? ''),
-    raw_json: toValue(json),
+    raw_body: '',
+    raw_json: undefined,
     headers: extractHeaders(res),
   };
 };
 
 const toLogoutResponse = (status, text, res, json) => ({
-  raw_json: json === undefined ? undefined : toValue(json),
+  raw_json: undefined,
   http_status: Number(status),
   raw_body: String(text ?? ''),
   headers: extractHeaders(res),
@@ -420,11 +507,12 @@ const handleLogin = async (req, ctx) => {
   const json = requireJsonBody(upstream.text);
   validateLoginJson(json);
   const response = toLoginResponse(upstream.status, upstream.text, upstream.res, json);
-  if (response.success && response.result.error_code === 'success' && response.result.token) {
-    const cookie = mergeCookieHeader(getSetCookies(upstream.res), response.result.token);
+  const token = toTrimmedString(json?.result?.token);
+  if (response.success && response.result.error_code === 'success' && token) {
+    const cookie = mergeCookieHeader(getSetCookies(upstream.res), token);
     if (cookie) {
       setSession(callCtx, host, {
-        token: response.result.token,
+        token,
         cookie,
         username,
         login_at_ms: Date.now(),
@@ -510,22 +598,24 @@ export function rpcdef(ctx) {
 }
 
 export const handlers = {
-  [METHOD_LOGIN_FULL]: (req, ctx = {}) => handleLogin(req, ctx),
-  [METHOD_LIST_FULL]: (req, ctx = {}) => handleListSecPolicy(req, ctx),
-  [METHOD_SET_FULL]: (req, ctx = {}) => handleSetSecPolicy(req, ctx),
-  [METHOD_MOVE_FULL]: (req, ctx = {}) => handleMoveSecPolicyPriority(req, ctx),
-  [METHOD_LOGOUT_FULL]: (req, ctx = {}) => handleLogout(req, ctx),
+  [METHOD_LOGIN_FULL]: (ctx = {}) => handleLogin(requestFromContext(ctx), ctx),
+  [METHOD_LIST_FULL]: (ctx = {}) => handleListSecPolicy(requestFromContext(ctx), ctx),
+  [METHOD_SET_FULL]: (ctx = {}) => handleSetSecPolicy(requestFromContext(ctx), ctx),
+  [METHOD_MOVE_FULL]: (ctx = {}) => handleMoveSecPolicyPriority(requestFromContext(ctx), ctx),
+  [METHOD_LOGOUT_FULL]: (ctx = {}) => handleLogout(requestFromContext(ctx), ctx),
 };
 
 export const _test = {
   buildHeaders,
   buildTlsOptions,
+  clearAllSessions,
   clearSession,
   errorWithCode,
   extractHeaders,
   fetchUpstream,
   getInstanceKey,
   getInstanceSessionMap,
+  getInsecureTlsDispatcher,
   getSession,
   getSetCookies,
   mergeCookieHeader,
@@ -538,7 +628,12 @@ export const _test = {
   parseJsonOrThrow,
   requireHost,
   requireJsonBody,
+  requestFromContext,
+  readResponseText,
+  redactSensitiveText,
+  redactSensitiveObject,
   resolveCallContext,
+  resolveMaxResponseBytes,
   resolveTimeoutMs,
   sessionCache,
   setSession,

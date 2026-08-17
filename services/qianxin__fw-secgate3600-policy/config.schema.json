@@ -42,6 +42,19 @@
       "minimum": 1,
       "description": "Alias for timeoutMs."
     },
+    "maxResponseBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5242880,
+      "default": 1048576,
+      "description": "Maximum upstream response size in bytes (capped at 5 MiB)."
+    },
+    "max_response_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5242880,
+      "description": "Alias for maxResponseBytes."
+    },
     "skipTlsVerify": {
       "type": "boolean",
       "default": false,
