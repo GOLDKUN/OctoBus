@@ -148,6 +148,14 @@ test('legacy projectName binding is rejected instead of silently losing project 
     () => _test.resolveProjectName({ projectName: 'legacy-project' }),
     (err) => err?.legacyCode === 'INVALID_ARGUMENT' && /use project_name/.test(err.message),
   );
+  assert.throws(
+    () => _test.resolveProjectName({ project_name: ' ', projectName: 'legacy-project' }),
+    (err) => err?.legacyCode === 'INVALID_ARGUMENT' && /use project_name/.test(err.message),
+  );
+  assert.throws(
+    () => _test.resolveProjectName({ project_name: ' ' }),
+    (err) => err?.legacyCode === 'INVALID_ARGUMENT' && /project_name is required/.test(err.message),
+  );
   assert.equal(_test.resolveProjectName({ project_name: 'service' }), 'service');
 });
 
