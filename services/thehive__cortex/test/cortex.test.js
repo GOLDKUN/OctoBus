@@ -64,6 +64,11 @@ test('internal helpers normalize bindings, headers, errors, and call context', a
   assert.deepEqual(_test.toValue(1n), { stringValue: '1' });
   assert.equal(_test.unwrapString(null), '');
   assert.equal(_test.unwrapString({ value: null }), '');
+  assert.deepEqual(_test.fromProtoValue({ structValue: { fields: {
+    name: { stringValue: 'cortex' },
+    missing: { nullValue: 'NULL_VALUE' },
+  } } }), { name: 'cortex', missing: null });
+  assert.deepEqual(_test.fromProtoValue(['plain', { boolValue: false }]), ['plain', false]);
 
   const unknown = _test.errorWithCode('SOMETHING_NEW', 'message');
   assert.equal(unknown.legacyCode, 'SOMETHING_NEW');
@@ -207,12 +212,12 @@ test('all RPCs reject malformed endpoints and status aliases select the batch AP
       ok: true,
       status: 200,
       headers: new Map([['content-type', 'application/json']]),
-      text: async () => JSON.stringify({ first: 'Success' }),
+      text: async () => JSON.stringify({ id: 'first', status: 'Success' }),
     };
   });
   const batch = await loadHandler(getJobStatusPath, { job_id: 'ignored', jobIds: ['first'] });
   assert.equal((await batch()).data.statuses[0].status, 'Success');
-  assert.equal(captured.url, 'http://localhost:18080/api/job/status');
+  assert.equal(captured.url, 'http://localhost:18080/api/job/first');
 
   const { handlers, METHOD_LIST_ANALYZERS_FULL } = await import('../src/cortex.js');
   const viaReqAlias = await handlers[METHOD_LIST_ANALYZERS_FULL]({
@@ -220,7 +225,7 @@ test('all RPCs reject malformed endpoints and status aliases select the batch AP
     req: {},
   });
   assert.deepEqual(viaReqAlias.data.analyzers, [{
-    id: '', name: '', analyzer_definition_id: '', description: '', data_type_list: [], version: '', tlp: 2, state: '', raw: { first: 'Success' },
+    id: 'first', name: '', analyzer_definition_id: '', description: '', data_type_list: [], version: '', tlp: 2, state: '', raw: { id: 'first', status: 'Success' },
   }]);
 });
 
@@ -385,6 +390,13 @@ test('AnalyzeObservable sends POST payload and maps response', async () => {
     data_type: 'ip',
     tlp: { value: 0 },
     message: 'test analysis',
+    parameters: {
+      fields: {
+        retries: { numberValue: 2 },
+        private: { boolValue: true },
+        tags: { listValue: { values: [{ stringValue: 'one' }, { stringValue: 'two' }] } },
+      },
+    },
   }, {
     bindings: { endpoint: 'http://localhost:18080' },
     secret: { apiKey: 'test-key' },
@@ -400,6 +412,7 @@ test('AnalyzeObservable sends POST payload and maps response', async () => {
   assert.equal(body.dataType, 'ip');
   assert.equal(body.tlp, 0);
   assert.equal(body.message, 'test analysis');
+  assert.deepEqual(body.parameters, { retries: 2, private: true, tags: ['one', 'two'] });
 
   assert.equal(res.data.id, 'job1');
   assert.equal(res.data.status, 'Waiting');
@@ -571,6 +584,17 @@ test('HTTP error does not leak upstream response body', async () => {
     assert.match(err.message, /PERMISSION_DENIED/);
     assert.doesNotMatch(err.message, /internal-details/);
   }
+});
+
+test('invalid JSON with an application/json content type maps to UNKNOWN', async () => {
+  setFetch(async () => ({
+    ok: true,
+    status: 200,
+    headers: new Map([['content-type', 'application/json']]),
+    text: async () => '{truncated',
+  }));
+  const handler = await loadHandler(listAnalyzersPath);
+  await assert.rejects(() => handler(), /UNKNOWN: response is not valid JSON/);
 });
 
 test('timeout error maps to DEADLINE_EXCEEDED', async () => {
@@ -768,15 +792,16 @@ test('GetJobStatus single job sends GET and maps response', async () => {
   assert.equal(res.data.statuses[0].status, 'Success');
 });
 
-test('GetJobStatus batch sends POST and maps response', async () => {
-  let captured;
+test('GetJobStatus batch aggregates documented single-job GET responses', async () => {
+  const captured = [];
   setFetch(async (url, init) => {
-    captured = { url, init };
+    captured.push({ url, init });
+    const jobId = url.split('/').at(-1);
     return {
       ok: true,
       status: 200,
       headers: new Map([['content-type', 'application/json']]),
-      text: async () => JSON.stringify({ job1: 'Success', job2: 'InProgress' }),
+      text: async () => JSON.stringify({ id: jobId, status: jobId === 'job1' ? 'Success' : 'InProgress' }),
     };
   });
 
@@ -785,11 +810,13 @@ test('GetJobStatus batch sends POST and maps response', async () => {
   });
   const res = await handler();
 
-  assert.equal(captured.url, 'http://localhost:18080/api/job/status');
-  assert.equal(captured.init.method, 'POST');
-  const body = JSON.parse(captured.init.body);
-  assert.deepEqual(body.jobIds, ['job1', 'job2']);
+  assert.deepEqual(captured.map(({ url }) => url), [
+    'http://localhost:18080/api/job/job1',
+    'http://localhost:18080/api/job/job2',
+  ]);
+  assert.equal(captured.every(({ init }) => init.method === 'GET'), true);
   assert.equal(res.data.statuses.length, 2);
+  assert.deepEqual(res.data.statuses.map(({ status }) => status), ['Success', 'InProgress']);
 });
 
 test('GetJobStatus handles not found', async () => {

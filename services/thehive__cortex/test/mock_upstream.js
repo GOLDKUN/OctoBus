@@ -210,31 +210,12 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // POST /api/job/status (batch status)
-  if (req.method === 'POST' && req.url === '/api/job/status') {
-    const chunks = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => {
-      const bodyRaw = Buffer.concat(chunks).toString();
-      const body = bodyRaw ? JSON.parse(bodyRaw) : {};
-      const jobIds = body.jobIds || [];
-      const statuses = {};
-      for (const jobId of jobIds) {
-        const job = sampleJobs.find((j) => j.id === jobId);
-        statuses[jobId] = job ? job.status : 'NotFound';
-      }
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(statuses));
-    });
-    return;
-  }
-
   res.writeHead(404, { 'content-type': 'text/plain' });
   res.end('not found');
 });
 
 server.listen(httpPort, () =>
   log(
-    `listening on :${httpPort} (GET /api/analyzer, GET /api/analyzer/type/:dataType, POST /api/analyzer/:id/run, GET /api/job/:id/report, GET /api/job, GET /api/job/:id, POST /api/job/status)`
+    `listening on :${httpPort} (GET /api/analyzer, GET /api/analyzer/type/:dataType, POST /api/analyzer/:id/run, GET /api/job/:id/report, GET /api/job, GET /api/job/:id)`
   )
 );

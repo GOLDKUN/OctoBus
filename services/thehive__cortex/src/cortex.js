@@ -152,6 +152,25 @@ const toValue = (val) => {
   return { stringValue: String(val) };
 };
 
+const fromProtoValue = (value) => {
+  if (Array.isArray(value)) return value.map(fromProtoValue);
+  if (!value || typeof value !== 'object') return value;
+  if ('stringValue' in value) return String(value.stringValue ?? '');
+  if ('numberValue' in value) return Number(value.numberValue);
+  if ('boolValue' in value) return Boolean(value.boolValue);
+  if ('nullValue' in value) return null;
+  if (value.listValue && Array.isArray(value.listValue.values)) {
+    return value.listValue.values.map(fromProtoValue);
+  }
+  if (value.structValue?.fields && typeof value.structValue.fields === 'object') {
+    return fromProtoValue(value.structValue);
+  }
+  const source = value.fields && typeof value.fields === 'object' && !Array.isArray(value.fields)
+    ? value.fields
+    : value;
+  return Object.fromEntries(Object.entries(source).map(([key, child]) => [key, fromProtoValue(child)]));
+};
+
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj ?? {}, key);
 
 const unwrapString = (source) => {
@@ -270,15 +289,11 @@ export function rpcdef(ctx) {
       }
       throw errorWithCode('UNAVAILABLE', 'upstream response could not be read');
     }
-    const contentType = res.headers.get('content-type') || '';
     if (!res.ok) {
       throwForHttpError(res.status);
     }
     if (!text.trim()) {
       return emptyValue;
-    }
-    if (contentType.includes('application/json')) {
-      return JSON.parse(text);
     }
     try {
       return JSON.parse(text);
@@ -372,7 +387,7 @@ export function rpcdef(ctx) {
     const rawTlp = firstDefined(req?.tlp, req?.Tlp);
     const tlp = toPositiveInt(rawTlp);
     const message = pickStringField(req, ['message', 'Message']) || '';
-    const parameters = req?.parameters ?? req?.Parameters ?? {};
+    const parameters = fromProtoValue(req?.parameters ?? req?.Parameters ?? {});
 
     const payload = {
       data,
@@ -568,29 +583,19 @@ export function rpcdef(ctx) {
     }
 
     if (batchJobIds.length > 0) {
-      // Batch job status - POST with Content-Type
-      const headers = buildHeaders(req);
-      const url = `${baseUrl}/api/job/status`;
-      const payload = { jobIds: batchJobIds };
-
+      // Cortex exposes single-job lookup; aggregate it for a portable batch RPC.
+      const headers = buildHeaders(req, false);
       logFlow('GetJobStatus:start', { jobIds: batchJobIds });
-      const res = await fetchCortex(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-      });
-      const json = await readJsonResponse(res, {});
-
-      // Batch response is a map of jobId -> status string
-      const statuses = [];
-      if (typeof json === 'object' && json !== null) {
-        for (const [jobId, status] of Object.entries(json)) {
-          statuses.push({
-            job_id: String(jobId),
-            status: String(status),
-          });
-        }
-      }
+      const statuses = await Promise.all(batchJobIds.map(async (jobId) => {
+        const normalizedId = String(jobId);
+        const url = `${baseUrl}/api/job/${encodeURIComponent(normalizedId)}`;
+        const res = await fetchCortex(url, { method: 'GET', headers });
+        const json = await readJsonResponse(res, {});
+        return {
+          job_id: String(json?.id ?? json?._id ?? normalizedId),
+          status: String(json?.status ?? 'Unknown'),
+        };
+      }));
 
       logFlow('GetJobStatus:done', { count: statuses.length });
       return {
@@ -638,6 +643,7 @@ export const _test = {
   parseHeaders,
   toPositiveInt,
   toValue,
+  fromProtoValue,
   readResponseText,
   resolveTimeoutMs,
   sanitizeHeaders,

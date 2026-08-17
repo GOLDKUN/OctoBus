@@ -96,7 +96,7 @@ Cortex supports the following observable `data_type` values:
 - `AnalyzeObservable` calls `POST /api/analyzer/:analyzerId/run` with `{ data, dataType, tlp, message, parameters }` JSON body.
 - `GetJobReport` calls `GET /api/job/:jobId/report` and maps the response to structured `summary`, `full`, `operations`, and `artifacts` fields.
 - `ListJobs` calls `GET /api/job` with query parameters `dataTypeFilter`, `dataFilter`, `analyzerFilter`, `range`.
-- `GetJobStatus` calls `GET /api/job/:jobId` for single status or `POST /api/job/status` for batch status.
+- `GetJobStatus` calls `GET /api/job/:jobId`; batch requests aggregate one such documented lookup per job ID.
 - Auth priority: request `api_key` → secret `apiKey` (Bearer) → secret `username`/`password` (Basic).
 - TLS certificate verification is always enabled. For private CAs, install the CA in the runtime trust store (for Node, `NODE_EXTRA_CA_CERTS` is supported).
 - Redirects are rejected to prevent credentials being forwarded to another origin.
