@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"octobus/internal/accesslog"
 	"octobus/internal/admin"
@@ -134,6 +135,7 @@ func serve(opts serveOptions) error {
 			logger.Info("daemon_shutdown_started")
 			grpcServer.GracefulStop()
 			_ = gateway.Close()
+			shutdownSupervisor(logger, sup)
 			logger.Info("daemon_shutdown_done")
 			return err
 		}
@@ -142,10 +144,19 @@ func serve(opts serveOptions) error {
 		_ = publicServer.Shutdown(context.Background())
 		grpcServer.GracefulStop()
 		_ = gateway.Close()
+		shutdownSupervisor(logger, sup)
 		<-serverErr
 		logger.Info("daemon_shutdown_done")
 	}
 	return nil
+}
+
+func shutdownSupervisor(logger *slog.Logger, sup *supervisor.Supervisor) {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := sup.Shutdown(shutdownCtx); err != nil {
+		logger.Warn("daemon_supervisor_shutdown_failed", "error", err)
+	}
 }
 
 func logStartupInventory(ctx context.Context, logger *slog.Logger, st *store.Store) error {

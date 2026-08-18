@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -282,6 +283,109 @@ func TestKilledEnabledProcessAutoRecovers(t *testing.T) {
 	}
 	inst, _ := st.GetInstance(ctx, "echo-test")
 	t.Fatalf("killed process did not recover: before=%+v after=%+v", started, inst)
+}
+
+func TestShutdownStopsRunningProcessAndPreservesEnabledState(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("helper process fixture is unix-oriented")
+	}
+	dataDir, st, entry := setupSupervisorHelperRuntime(t)
+	ctx := context.Background()
+	if err := st.UpsertInstance(ctx, domain.Instance{ID: "echo-test", ServiceID: "echo", Name: "Echo Test", Enabled: false, Status: domain.StatusStopped, NodeEntry: entry, ConfigJSON: []byte(`{}`), SecretJSON: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	sup := New(dataDir, st)
+	if err := sup.Start(ctx, "echo-test"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = sup.Shutdown(shutdownCtx)
+	})
+	started, err := st.GetInstance(ctx, "echo-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.PID == nil {
+		t.Fatalf("started instance missing pid: %+v", started)
+	}
+	pid := *started.PID
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := sup.Shutdown(shutdownCtx); err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := st.GetInstance(ctx, "echo-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stopped.Enabled || stopped.Status != domain.StatusStopped || stopped.PID != nil {
+		t.Fatalf("shutdown should stop process without disabling instance: %+v", stopped)
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := proc.Signal(syscall.Signal(0)); err == nil {
+		t.Fatalf("shutdown returned while child process %d was still alive", pid)
+	}
+}
+
+func TestShutdownCancelsPendingAutoRestart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("helper process fixture is unix-oriented")
+	}
+	dataDir, st, entry := setupSupervisorHelperRuntime(t)
+	ctx := context.Background()
+	if err := st.UpsertInstance(ctx, domain.Instance{ID: "echo-test", ServiceID: "echo", Name: "Echo Test", Enabled: false, Status: domain.StatusStopped, NodeEntry: entry, ConfigJSON: []byte(`{}`), SecretJSON: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	sup := New(dataDir, st)
+	if err := sup.Start(ctx, "echo-test"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = sup.Shutdown(shutdownCtx)
+	})
+	started, err := st.GetInstance(ctx, "echo-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.PID == nil {
+		t.Fatalf("started instance missing pid: %+v", started)
+	}
+	proc, err := os.FindProcess(*started.PID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := proc.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 800*time.Millisecond, func() bool {
+		inst, err := st.GetInstance(ctx, "echo-test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return inst.Status == domain.StatusDegraded && inst.PID == nil
+	})
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := sup.Shutdown(shutdownCtx); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	stopped, err := st.GetInstance(ctx, "echo-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped.Status != domain.StatusStopped || stopped.PID != nil || stopped.ListenAddr != "" {
+		t.Fatalf("shutdown should cancel pending restart and leave no running process: %+v", stopped)
+	}
 }
 
 func TestStartWithRelativeDataDirRequiresMatchingWorkingDirectory(t *testing.T) {
@@ -1281,6 +1385,20 @@ func runSupervisorHelper() {
 
 func waitForInterrupt() {
 	select {}
+}
+
+func eventually(t *testing.T, timeout time.Duration, fn func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !fn() {
+		t.Fatalf("condition was not satisfied within %s", timeout)
+	}
 }
 
 func ptr[T any](v T) *T {
