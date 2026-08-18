@@ -1,0 +1,15 @@
+{
+  "schema": "chaitin.octobus.service.v1",
+  "name": "jianwei-vuln",
+  "displayName": "Jianwei Vuln",
+  "description": "OctoBus service package for Jianwei (鉴微) Vulnerability Management Platform integration. Supports asset management, IP/Web vulnerability listing and disposal, threat intelligence, vulnerability knowledge base, scan device management, and VPT scoring via JSON-RPC 2.0 protocol.",
+  "runtime": {
+    "mode": "long-running"
+  },
+  "proto": {
+    "roots": ["proto"],
+    "files": ["proto/jianwei_vuln.proto"]
+  },
+  "configSchema": "config.schema.json",
+  "secretSchema": "secret.schema.json"
+}

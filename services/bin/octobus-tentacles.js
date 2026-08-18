@@ -77,6 +77,10 @@ const services = {
     entryFile: "../chaitin__cloudatlas/bin/cloudatlas.js",
     serviceModule: "../chaitin__cloudatlas/src/service.js",
   },
+  "jianwei-vuln": {
+    entryFile: "../chaitin__jianwei-vuln/bin/jianwei-vuln.js",
+    serviceModule: "../chaitin__jianwei-vuln/src/service.js",
+  },
   "cosmos": {
     entryFile: "../chaitin__cosmos/bin/cosmos.js",
     serviceModule: "../chaitin__cosmos/src/service.js",

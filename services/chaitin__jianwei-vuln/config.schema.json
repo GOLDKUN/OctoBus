@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "baseUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "Root URL of the Jianwei platform (e.g. https://jianwei.example.com). The /insight suffix is auto-stripped. API calls go to /pedestal/rpc."
+    },
+    "skipTlsVerify": {
+      "type": "boolean",
+      "default": false,
+      "description": "Skip TLS certificate verification only for a private deployment with a self-signed certificate. This weakens transport security."
+    }
+  },
+  "required": ["baseUrl"]
+}
