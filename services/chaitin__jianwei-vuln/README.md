@@ -62,6 +62,11 @@ OCTOBUS_SERVICE_CONTEXT='{"config":{"baseUrl":"https://your-host"},"secret":{"to
 - `UpdateAsset` - Update asset properties
 - `BatchUpdateAssets` - Batch update multiple assets
 
+Pagination uses Jianwei's page/page-size API. `offset` must be an exact
+multiple of `count`; otherwise the service returns `INVALID_ARGUMENT` instead
+of silently returning the wrong slice. When `offset` is supplied without
+`count`, the page size defaults to 10 and the same alignment rule applies.
+
 ### VulnerabilityService
 - `ListIpVulnerabilities` - List IP-based vulnerabilities
 - `ListWebVulnerabilities` - List Web-based vulnerabilities

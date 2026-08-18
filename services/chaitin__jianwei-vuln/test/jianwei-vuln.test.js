@@ -108,6 +108,7 @@ test("handlers reject malformed or precision-losing integer fields", async () =>
     await assert.rejects(invoke("AssetService/ListAssets", { count: "0", offset: "0" }), (error) => error.legacyCode === "INVALID_ARGUMENT");
     await assert.rejects(invoke("AssetService/ListAssets", { count: "10", offset: "-1" }), (error) => error.legacyCode === "INVALID_ARGUMENT");
     await assert.rejects(invoke("AssetService/ListAssets", { count: "10", offset: "15" }), (error) => error.legacyCode === "INVALID_ARGUMENT" && /multiple/.test(error.message));
+    await assert.rejects(invoke("AssetService/ListAssets", { offset: "5" }), (error) => error.legacyCode === "INVALID_ARGUMENT" && /multiple/.test(error.message));
     await assert.rejects(invoke("VulnerabilityService/UpdateVulnerabilityStatus", { vuln_ids: ["1", "bad"] }), (error) => error.legacyCode === "INVALID_ARGUMENT");
 });
 
@@ -199,5 +200,22 @@ test("client uses secure defaults, bounded requests, and typed errors", async (t
         });
         await assert.rejects(new JianweiClient("http://127.0.0.1:18080", "token", { retryOptions: { maxRetries: 0 } }).call("test.method"), (error) => error.legacyCode === "RESOURCE_EXHAUSTED");
         assert.equal(cancelled, true);
+    });
+    await t.test("parses valid streaming responses under 4 MiB", async () => {
+        const bytes = new TextEncoder().encode(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } }));
+        globalThis.fetch = async () => ({
+            ok: true,
+            status: 200,
+            headers: { get: () => null },
+            body: new ReadableStream({
+                start(controller) {
+                    controller.enqueue(bytes.subarray(0, 7));
+                    controller.enqueue(bytes.subarray(7));
+                    controller.close();
+                },
+            }),
+        });
+        const result = await new JianweiClient("http://127.0.0.1:18080", "token", { retryOptions: { maxRetries: 0 } }).call("test.method");
+        assert.deepEqual(result, { ok: true });
     });
 });
