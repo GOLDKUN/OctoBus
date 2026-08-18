@@ -5,6 +5,7 @@
 
 import { GrpcError, grpcStatus } from '@chaitin-ai/octobus-sdk';
 import { Agent } from 'undici';
+import { isIP } from 'node:net';
 
 const DEFAULT_ENDPOINT = 'https://api.cloudflare.com/client/v4';
 const DEFAULT_TIMEOUT_MS = 1500;
@@ -173,7 +174,20 @@ const requireTargets = (req, keys) => {
         if (item === undefined || item === null || String(item).trim() === '') {
           throw errorWithCode('INVALID_ARGUMENT', `${key} elements must be non-empty strings`);
         }
-        return String(item).trim();
+        const target = String(item).trim();
+        const [address, prefix, ...rest] = target.split('/');
+        const family = isIP(address);
+        if (family === 0 || rest.length > 0) {
+          throw errorWithCode('INVALID_ARGUMENT', `${key} elements must be valid IP addresses or CIDR ranges`);
+        }
+        if (prefix !== undefined) {
+          const bits = Number(prefix);
+          const maximum = family === 4 ? 32 : 128;
+          if (!/^\d+$/.test(prefix) || !Number.isSafeInteger(bits) || bits < 0 || bits > maximum) {
+            throw errorWithCode('INVALID_ARGUMENT', `${key} elements must be valid IP addresses or CIDR ranges`);
+          }
+        }
+        return target;
       });
       return [...new Set(targets)];
     }

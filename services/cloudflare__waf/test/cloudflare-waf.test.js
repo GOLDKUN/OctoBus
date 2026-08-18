@@ -110,6 +110,16 @@ test('internal helpers: bindings, headers, mode, target, struct, conversions', a
   assert.throws(() => _test.requireTargets({ targets: 'x' }, ['targets']), /must be an array/);
   assert.throws(() => _test.requireTargets({ targets: [] }, ['targets']), /non-empty/);
   assert.throws(() => _test.requireTargets({ targets: [''] }, ['targets']), /non-empty strings/);
+  assert.deepEqual(
+    _test.requireTargets({ targets: ['2001:db8::1', '2001:db8::/64', '192.0.2.0/24'] }, ['targets']),
+    ['2001:db8::1', '2001:db8::/64', '192.0.2.0/24'],
+  );
+  for (const target of ['example.com', '1.2.3.4/33', '2001:db8::/129', '1.2.3.4/-1', '1.2.3.4/24/1']) {
+    assert.throws(
+      () => _test.requireTargets({ targets: [target] }, ['targets']),
+      /valid IP addresses or CIDR ranges/,
+    );
+  }
   assert.throws(() => _test.requireTargets({}, ['targets']), /required/);
 
   const err = _test.errorWithCode('NEW_CODE', 'msg');
