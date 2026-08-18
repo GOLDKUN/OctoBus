@@ -353,6 +353,10 @@ const services = {
     entryFile: "../sangfor__xdr_v2-0-45/bin/sangfor-xdr-v2-0-45.js",
     serviceModule: "../sangfor__xdr_v2-0-45/src/service.js",
   },
+  "sangfor-xdr": {
+    entryFile: "../sangfor__xdr/bin/sangfor-xdr.js",
+    serviceModule: "../sangfor__xdr/src/service.js",
+  },
   "slack-group-robot": {
     entryFile: "../slack__group-robot/bin/slack-group-robot.js",
     serviceModule: "../slack__group-robot/src/service.js",
