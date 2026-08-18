@@ -38,7 +38,7 @@ message AccessRule {
 message BlockIPRequest {
   string zone_id = 1;             // Zone ID，可选；缺省时使用配置中的 zoneId
   string account_id = 2;          // Account ID，可选；提供则使用 account 维度（优先于 zone）
-  repeated string targets = 3;    // 待封禁的合法 IPv4/IPv6/CIDR 列表，必填且非空；重复值仅处理一次
+  repeated string targets = 3;    // 待封禁的合法 IPv4/IPv6/CIDR 列表，必填，最多 500 项；重复值仅处理一次
   string mode = 4;                // 规则模式，可选，默认 block；允许 block/challenge/whitelist/js_challenge/managed_challenge
   string notes = 5;               // 备注，可选，仅在创建新规则时写入
 }
@@ -51,7 +51,7 @@ message BlockIPResponse {
 message UnblockIPRequest {
   string zone_id = 1;             // Zone ID，可选；缺省时使用配置中的 zoneId
   string account_id = 2;          // Account ID，可选；提供则使用 account 维度（优先于 zone）
-  repeated string targets = 3;    // 待解封的合法 IPv4/IPv6/CIDR 列表，必填且非空；重复值仅处理一次
+  repeated string targets = 3;    // 待解封的合法 IPv4/IPv6/CIDR 列表，必填，最多 500 项；重复值仅处理一次
   string mode = 4;                // 可选，仅删除指定模式的规则；缺省删除匹配该 IP 的任意模式规则
 }
 

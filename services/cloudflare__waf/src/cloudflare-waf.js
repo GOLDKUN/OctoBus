@@ -18,6 +18,7 @@ const SECURITY_LEVELS = ['off', 'essentially_off', 'low', 'medium', 'high', 'und
 const MAX_PER_PAGE = 50;
 const RULE_SCAN_PER_PAGE = 50;
 const MAX_RULE_SCAN_PAGES = 1000;
+const MAX_TARGETS_PER_REQUEST = 500;
 
 let insecureTlsDispatcher;
 const blockLocks = new Map();
@@ -169,6 +170,9 @@ const requireTargets = (req, keys) => {
       }
       if (val.length === 0) {
         throw errorWithCode('INVALID_ARGUMENT', `${key} must be non-empty`);
+      }
+      if (val.length > MAX_TARGETS_PER_REQUEST) {
+        throw errorWithCode('INVALID_ARGUMENT', `${key} must contain at most ${MAX_TARGETS_PER_REQUEST} elements`);
       }
       const targets = val.map((item) => {
         if (item === undefined || item === null || String(item).trim() === '') {

@@ -109,6 +109,10 @@ test('internal helpers: bindings, headers, mode, target, struct, conversions', a
   assert.deepEqual(_test.requireTargets({ targets: [' 1.1.1.1 '] }, ['targets']), ['1.1.1.1']);
   assert.throws(() => _test.requireTargets({ targets: 'x' }, ['targets']), /must be an array/);
   assert.throws(() => _test.requireTargets({ targets: [] }, ['targets']), /non-empty/);
+  assert.throws(
+    () => _test.requireTargets({ targets: Array.from({ length: 501 }, (_, index) => `192.0.${Math.floor(index / 256)}.${index % 256}`) }, ['targets']),
+    /at most 500 elements/,
+  );
   assert.throws(() => _test.requireTargets({ targets: [''] }, ['targets']), /non-empty strings/);
   assert.deepEqual(
     _test.requireTargets({ targets: ['2001:db8::1', '2001:db8::/64', '192.0.2.0/24'] }, ['targets']),
