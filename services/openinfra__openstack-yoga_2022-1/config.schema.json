@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["project_name"],
+  "anyOf": [
+    { "required": ["auth_url"] },
+    { "required": ["authUrl"] },
+    { "required": ["identityEndpoint"] }
+  ],
+  "properties": {
+    "auth_url": {
+      "type": "string",
+      "description": "OpenStack Keystone v3 base URL, e.g. https://identity.example.com:5000 or http://controller:5000. The /v3/auth/tokens, /v3/projects, /v2.0, /v3/{project_id}/volumes, and /v2/{project_id} endpoints are appended to this base."
+    },
+    "authUrl": {
+      "type": "string",
+      "description": "Alias for auth_url."
+    },
+    "identityEndpoint": {
+      "type": "string",
+      "description": "Alias for auth_url (matches OpenStack SDK terminology)."
+    },
+    "region": {
+      "type": "string",
+      "description": "OpenStack service-catalog region. If set, every queried service must expose a matching public endpoint; cross-region fallback is rejected."
+    },
+    "project_name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "Default Keystone project name to scope tokens against."
+    },
+    "project_domain_name": {
+      "type": "string",
+      "description": "Default Keystone project domain name (typically 'Default')."
+    },
+    "projectDomainName": {
+      "type": "string",
+      "description": "Alias for project_domain_name."
+    },
+    "user_domain_name": {
+      "type": "string",
+      "description": "Default Keystone user domain name (typically 'Default')."
+    },
+    "userDomainName": {
+      "type": "string",
+      "description": "Alias for user_domain_name."
+    },
+    "timeoutMs": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 15000,
+      "description": "HTTP timeout in milliseconds for both Keystone auth and upstream API calls."
+    },
+    "maxResponseBytes": {
+      "type": "integer",
+      "minimum": 1024,
+      "maximum": 52428800,
+      "default": 10485760,
+      "description": "Maximum accepted upstream response size in bytes."
+    },
+    "allowInsecureHttp": {
+      "type": "boolean",
+      "default": false,
+      "description": "Allow http:// auth_url values for private deployments. Defaults to false (http:// is rejected)."
+    },
+    "allow_insecure_http": {
+      "type": "boolean",
+      "default": false,
+      "description": "Alias for allowInsecureHttp."
+    },
+    "skipTlsVerify": {
+      "type": "boolean",
+      "default": false,
+      "description": "Skip TLS certificate verification for private deployments."
+    },
+    "tlsInsecureSkipVerify": {
+      "type": "boolean",
+      "default": false,
+      "description": "Alias for skipTlsVerify."
+    },
+    "insecureSkipVerify": {
+      "type": "boolean",
+      "default": false,
+      "description": "Alias for skipTlsVerify."
+    }
+  }
+}

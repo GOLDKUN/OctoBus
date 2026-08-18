@@ -144,7 +144,8 @@
     "nist-nvd-v2": "bin/nist-nvd-v2.js",
     "siem": "bin/siem.js",
     "security-engine": "bin/security-engine.js",
-    "kubernetes-api": "bin/kubernetes-api.js"
+    "kubernetes-api": "bin/kubernetes-api.js",
+    "openstack-yoga-2022-1": "bin/openstack-yoga-2022-1.js"
   },
   "files": [
     "bin/huawei-ccm.js",
@@ -428,7 +429,9 @@
     "wazuh__siem",
     "bin/siem.js",
     "bin/kubernetes-api.js",
-    "kubernetes__kubernetes_api"
+    "kubernetes__kubernetes_api",
+    "bin/openstack-yoga-2022-1.js",
+    "openinfra__openstack-yoga_2022-1"
   ],
   "scripts": {
     "validate": "node scripts/validate-service-package.mjs",

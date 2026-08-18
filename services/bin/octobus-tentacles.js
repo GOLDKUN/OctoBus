@@ -577,6 +577,10 @@ const services = {
     entryFile: "../kubernetes__kubernetes_api/bin/kubernetes-api.js",
     serviceModule: "../kubernetes__kubernetes_api/src/service.js",
   },
+  "openstack-yoga-2022-1": {
+    entryFile: "../openinfra__openstack-yoga_2022-1/bin/openstack-yoga-2022-1.js",
+    serviceModule: "../openinfra__openstack-yoga_2022-1/src/service.js",
+  },
 };
 
 const serviceNames = Object.keys(services);

@@ -1,0 +1,49 @@
+{
+  "schema": "chaitin.octobus.service.v1",
+  "name": "openstack-yoga-2022-1",
+  "displayName": "OpenInfra OpenStack Yoga (2022.1)",
+  "description": "OctoBus package for OpenInfra OpenStack Yoga (2022.1) read-only Keystone/Identity, Compute, Neutron and Block Storage queries.",
+  "runtime": {
+    "mode": "long-running"
+  },
+  "proto": {
+    "roots": [
+      "proto"
+    ],
+    "files": [
+      "proto/openstack_yoga_2022_1.proto"
+    ]
+  },
+  "configSchema": "config.schema.json",
+  "secretSchema": "secret.schema.json",
+  "sdk": {
+    "cli": {
+      "commands": {
+        "OpenStack_Yoga_2022_1.OpenStack_Yoga_2022_1/ListProjects": {
+          "name": "list-projects",
+          "description": "List Keystone v3 projects visible to the configured scope."
+        },
+        "OpenStack_Yoga_2022_1.OpenStack_Yoga_2022_1/ListServers": {
+          "name": "list-servers",
+          "description": "List Nova v2.1 compute servers in the scoped project."
+        },
+        "OpenStack_Yoga_2022_1.OpenStack_Yoga_2022_1/GetServer": {
+          "name": "get-server",
+          "description": "Fetch a single Nova v2.1 compute server by id."
+        },
+        "OpenStack_Yoga_2022_1.OpenStack_Yoga_2022_1/ListNetworks": {
+          "name": "list-networks",
+          "description": "List Neutron v2.0 networks visible to the configured scope."
+        },
+        "OpenStack_Yoga_2022_1.OpenStack_Yoga_2022_1/ListVolumes": {
+          "name": "list-volumes",
+          "description": "List Cinder v3 volumes in the scoped project."
+        },
+        "OpenStack_Yoga_2022_1.OpenStack_Yoga_2022_1/ListFlavors": {
+          "name": "list-flavors",
+          "description": "List Nova v2.1 compute flavors visible to the configured scope."
+        }
+      }
+    }
+  }
+}
