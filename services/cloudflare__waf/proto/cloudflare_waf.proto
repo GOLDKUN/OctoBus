@@ -8,7 +8,8 @@ import "google/protobuf/wrappers.proto";
 option go_package = "miner/grpc-service/Cloudflare_WAF";
 
 service Cloudflare_WAF {
-  // 封禁 IP：在 IP Access Rules 中创建 mode=block 规则；已存在相同 target+mode 的规则则幂等返回，不重复创建
+  // 封禁 IP：在 IP Access Rules 中创建规则；单个服务进程内会串行化相同 scope+target+mode 并幂等复用。
+  // 多进程或多副本之间不共享锁，跨实例并发创建属于 best-effort；调用方应避免并发提交同一目标。
   rpc BlockIP(BlockIPRequest) returns (BlockIPResponse) {}
 
   // 解封 IP：查找该 IP 对应的 Access Rule 并删除；未找到视为已解封（幂等，deleted_count=0）
