@@ -83,9 +83,32 @@ async function readJson(response) {
     if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
         throw serviceError("RESOURCE_EXHAUSTED", "upstream response exceeds 4 MiB");
     }
-    const text = await response.text();
-    if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) {
-        throw serviceError("RESOURCE_EXHAUSTED", "upstream response exceeds 4 MiB");
+    const reader = response.body?.getReader?.();
+    let text;
+    if (reader) {
+        const chunks = [];
+        let size = 0;
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) {
+                break;
+            }
+            size += value.byteLength;
+            if (size > MAX_RESPONSE_BYTES) {
+                await reader.cancel().catch(() => {});
+                throw serviceError("RESOURCE_EXHAUSTED", "upstream response exceeds 4 MiB");
+            }
+            chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+        }
+        text = Buffer.concat(chunks, size).toString("utf8");
+    }
+    else {
+        // Kept for test doubles and non-standard fetch implementations that do
+        // not expose a web ReadableStream.
+        text = await response.text();
+        if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) {
+            throw serviceError("RESOURCE_EXHAUSTED", "upstream response exceeds 4 MiB");
+        }
     }
     try {
         return JSON.parse(text);

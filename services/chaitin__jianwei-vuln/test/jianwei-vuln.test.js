@@ -107,6 +107,7 @@ test("handlers reject malformed or precision-losing integer fields", async () =>
     await assert.rejects(invoke("AssetService/GetAsset", { id: "9007199254740992" }), (error) => error.legacyCode === "INVALID_ARGUMENT");
     await assert.rejects(invoke("AssetService/ListAssets", { count: "0", offset: "0" }), (error) => error.legacyCode === "INVALID_ARGUMENT");
     await assert.rejects(invoke("AssetService/ListAssets", { count: "10", offset: "-1" }), (error) => error.legacyCode === "INVALID_ARGUMENT");
+    await assert.rejects(invoke("AssetService/ListAssets", { count: "10", offset: "15" }), (error) => error.legacyCode === "INVALID_ARGUMENT" && /multiple/.test(error.message));
     await assert.rejects(invoke("VulnerabilityService/UpdateVulnerabilityStatus", { vuln_ids: ["1", "bad"] }), (error) => error.legacyCode === "INVALID_ARGUMENT");
 });
 
@@ -178,5 +179,25 @@ test("client uses secure defaults, bounded requests, and typed errors", async (t
         await assert.rejects(new JianweiClient("http://127.0.0.1:18080", "token", { retryOptions: { maxRetries: 0 } }).call("test.method"), (error) => error.legacyCode === "INTERNAL");
         globalThis.fetch = async () => ({ ...response({}, 200), text: async () => "not-json" });
         await assert.rejects(new JianweiClient("http://127.0.0.1:18080", "token", { retryOptions: { maxRetries: 0 } }).call("test.method"), (error) => error.legacyCode === "INTERNAL");
+    });
+    await t.test("stops streaming responses as soon as they exceed 4 MiB", async () => {
+        let cancelled = false;
+        const chunk = new Uint8Array(3 * 1024 * 1024);
+        globalThis.fetch = async () => ({
+            ok: true,
+            status: 200,
+            headers: { get: () => null },
+            body: new ReadableStream({
+                start(controller) {
+                    controller.enqueue(chunk);
+                    controller.enqueue(chunk);
+                },
+                cancel() {
+                    cancelled = true;
+                },
+            }),
+        });
+        await assert.rejects(new JianweiClient("http://127.0.0.1:18080", "token", { retryOptions: { maxRetries: 0 } }).call("test.method"), (error) => error.legacyCode === "RESOURCE_EXHAUSTED");
+        assert.equal(cancelled, true);
     });
 });

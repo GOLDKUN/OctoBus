@@ -39,6 +39,9 @@ function buildListParams(request) {
     if (request.offset !== undefined && request.offset !== null) {
         const offset = integer(request.offset, "offset");
         const count = request.count === undefined || request.count === null ? 10 : integer(request.count, "count", 1);
+        if (offset % count !== 0) {
+            throw serviceError("INVALID_ARGUMENT", "offset must be a multiple of count");
+        }
         if (request.count === undefined || request.count === null) {
             params.page_size = count;
         }
