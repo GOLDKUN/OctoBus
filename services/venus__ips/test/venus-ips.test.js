@@ -287,9 +287,13 @@ test('helper coverage', () => {
   assert.equal(h.parseIpsLog(titledCells(15, 7)).skipped, 1);
   assert.equal(h.parseIpsLog(titledCells(13, 6)).skipped, 1);
   assert.equal(h.parseIpsLog(titledCells(14, 5)).skipped, 1);
+  // A data row with no recognizable title cells is structural corruption.
+  const untitled = '<tr><td>name</td><td>2026-01-02 03:04:05</td></tr>';
+  assert.equal(h.parseIpsLog(untitled).skipped, 1);
   // limit
   const two = '<tr>' + Array.from({ length: 14 }, (_, i) => `<td title="${i === 6 ? '2026-01-02 03:04:05' : 'a'}">a</td>`).join('') + '</tr>';
   assert.equal(h.parseIpsLog(two + two, 1).entries.length, 1);
+  assert.equal(h.parseIpsLog(two + titledCells(13, 6), 1).skipped, 1);
 
   assert.equal(h.pickInt({ a: '5' }, ['a'], 0), 5);
   assert.equal(h.pickInt({ a: '' }, ['a'], 9), 9);

@@ -274,7 +274,7 @@ const rowTitles = (rowHtml) => {
   return titles;
 };
 
-// 解析 HTML 日志页为结构化条目:数据行需含时间且至少 13 个 title 单元格。
+// 解析 HTML 日志页为结构化条目：数据行必须包含恰好 14 个 title 单元格，时间位于第 7 列。
 const parseIpsLog = (html, limit = 0) => {
   const entries = [];
   let structuralRows = 0;
@@ -283,6 +283,13 @@ const parseIpsLog = (html, limit = 0) => {
   let m;
   while ((m = rowRe.exec(html)) !== null) {
     const titles = rowTitles(m[1]);
+    // Header rows have no data cells. A row containing <td> but no title is a
+    // malformed candidate and must fail closed rather than silently disappearing.
+    if (titles.length === 0 && /<td\b/i.test(m[1])) {
+      structuralRows += 1;
+      skipped += 1;
+      continue;
+    }
     // Header rows have no titled data cells. Any titled row is a candidate log row and
     // must have exactly 14 columns with the timestamp at index 6; fail closed upstream
     // if a candidate is malformed so callers never receive a silently incomplete list.
@@ -294,8 +301,9 @@ const parseIpsLog = (html, limit = 0) => {
     }
     const entry = {};
     ENTRY_FIELDS.forEach((key, i) => { entry[key] = titles[i] ?? ''; });
-    entries.push(entry);
-    if (limit > 0 && entries.length >= limit) break;
+    // Once the requested limit is reached, stop collecting but continue scanning
+    // remaining rows so malformed rows cannot be hidden by pagination.
+    if (limit === 0 || entries.length < limit) entries.push(entry);
   }
   return { entries, skipped, structuralRows };
 };
