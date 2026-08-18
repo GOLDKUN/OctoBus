@@ -300,6 +300,15 @@ async function startMockUpstream() {
         && req.url === "/api/assetSrv/machineController/searchMachineList"
         && req.headers.token === "smoke-secret"
         && req.headers.menucode === "5101";
+      const nsfocusIDSRequest = req.method === "GET"
+        && req.url === "/ips/eventList/detail/false/dns/false"
+        && req.headers.cookie === "smoke-secret"
+        && req.headers["x-requested-with"] === "XMLHttpRequest";
+      if (nsfocusIDSRequest) {
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.end('<table id="mytable"><tr data-smoke="true" class="even"><td><img title="低危险程度"><img title="允许"></td><td>2026-01-02 03:04:05</td><td><a>[1]&nbsp;smoke event</a></td><td>198.51.100.1:1</td><td>203.0.113.1:2</td></tr></table>');
+        return;
+      }
       res.end(JSON.stringify(cloudLockRequest ? {
         code: "1",
         msg: "success",
@@ -651,7 +660,7 @@ function stringSample(name, schema, mockBaseURL, kind) {
   if (lower.includes("password")) {
     return "smoke-password";
   }
-  if (lower.includes("token") || lower.includes("secret") || lower.includes("key") || lower.includes("ak") || lower.includes("sk")) {
+  if (lower.includes("token") || lower.includes("secret") || lower.includes("key") || lower.includes("cookie") || lower.includes("ak") || lower.includes("sk")) {
     return "smoke-secret";
   }
   if (lower.includes("id")) {
