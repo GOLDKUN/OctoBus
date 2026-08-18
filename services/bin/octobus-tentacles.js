@@ -109,6 +109,10 @@ const services = {
     entryFile: "../baiduwaf__waf-web-template/bin/baiduwaf-waf-web-template.js",
     serviceModule: "../baiduwaf__waf-web-template/src/service.js",
   },
+  "cloudflare-waf": {
+    entryFile: "../cloudflare__waf/bin/cloudflare-waf.js",
+    serviceModule: "../cloudflare__waf/src/service.js",
+  },
   "das-gateway-v3": {
     entryFile: "../das__gateway_v3/bin/das-gateway-v3.js",
     serviceModule: "../das__gateway_v3/src/service.js",

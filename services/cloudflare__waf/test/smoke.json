@@ -1,0 +1,13 @@
+{
+  "method": "Cloudflare_WAF.Cloudflare_WAF/ListAccessRules",
+  "request": {
+    "zoneId": "smoke-zone",
+    "value": "203.0.113.7"
+  },
+  "requireBusinessSuccess": true,
+  "requireUpstreamPerProtocol": true,
+  "protocols": ["connect", "grpc", "mcp"],
+  "upstream": {
+    "method": "GET"
+  }
+}
