@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -385,6 +386,100 @@ func TestShutdownCancelsPendingAutoRestart(t *testing.T) {
 	}
 	if stopped.Status != domain.StatusStopped || stopped.PID != nil || stopped.ListenAddr != "" {
 		t.Fatalf("shutdown should cancel pending restart and leave no running process: %+v", stopped)
+	}
+}
+
+func TestShutdownWaitsForStartInProgress(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("helper process fixture is unix-oriented")
+	}
+	dataDir, st, entry := setupSupervisorHelperRuntimeWithEnv(t, "OCTOBUS_SUPERVISOR_HELPER_START_DELAY=1500ms")
+	ctx := context.Background()
+	if err := st.UpsertInstance(ctx, domain.Instance{ID: "echo-test", ServiceID: "echo", Name: "Echo Test", Enabled: false, Status: domain.StatusStopped, NodeEntry: entry, ConfigJSON: []byte(`{}`), SecretJSON: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	sup := New(dataDir, st)
+	startErr := make(chan error, 1)
+	go func() {
+		startErr <- sup.Start(ctx, "echo-test")
+	}()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = sup.Shutdown(shutdownCtx)
+	})
+	eventually(t, 800*time.Millisecond, func() bool {
+		inst, err := st.GetInstance(ctx, "echo-test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return inst.Status == domain.StatusRunning && inst.PID != nil
+	})
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := sup.Shutdown(shutdownCtx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-startErr:
+		if err == nil {
+			t.Fatal("in-progress start unexpectedly succeeded after shutdown")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("shutdown returned before in-progress start completed")
+	}
+	stopped, err := st.GetInstance(ctx, "echo-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stopped.Enabled || stopped.Status != domain.StatusStopped || stopped.PID != nil || stopped.ListenAddr != "" {
+		t.Fatalf("shutdown should clean up in-progress start: %+v", stopped)
+	}
+}
+
+func TestShutdownBoundsUnresponsiveProcessStopByContext(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("helper process fixture is unix-oriented")
+	}
+	dataDir, st, entry := setupSupervisorHelperRuntimeWithEnv(t, "OCTOBUS_SUPERVISOR_HELPER_IGNORE_INTERRUPT=1")
+	ctx := context.Background()
+	for _, id := range []string{"echo-a", "echo-b"} {
+		if err := st.UpsertInstance(ctx, domain.Instance{ID: id, ServiceID: "echo", Name: id, Enabled: false, Status: domain.StatusStopped, NodeEntry: entry, ConfigJSON: []byte(`{}`), SecretJSON: []byte(`{}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sup := New(dataDir, st)
+	for _, id := range []string{"echo-a", "echo-b"} {
+		if err := sup.Start(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = sup.Shutdown(shutdownCtx)
+	})
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := sup.Shutdown(shutdownCtx)
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("shutdown error=%v, want context deadline exceeded", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("shutdown ignored context budget, elapsed=%s", elapsed)
+	}
+	for _, id := range []string{"echo-a", "echo-b"} {
+		inst, err := st.GetInstance(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !inst.Enabled || inst.Status != domain.StatusStopped || inst.PID != nil || inst.ListenAddr != "" {
+			t.Fatalf("shutdown should persist stopped state for %s: %+v", id, inst)
+		}
 	}
 }
 
@@ -1314,12 +1409,17 @@ func TestBackoff(t *testing.T) {
 	}
 }
 
-func writeSupervisorHelperEntry(path string) error {
-	body := fmt.Sprintf("#!/bin/sh\nexec env OCTOBUS_SUPERVISOR_HELPER=1 %q -test.run=TestMain -- \"$@\"\n", os.Args[0])
+func writeSupervisorHelperEntry(path string, extraEnv ...string) error {
+	env := append([]string{"OCTOBUS_SUPERVISOR_HELPER=1"}, extraEnv...)
+	body := fmt.Sprintf("#!/bin/sh\nexec env %s %q -test.run=TestMain -- \"$@\"\n", strings.Join(env, " "), os.Args[0])
 	return os.WriteFile(path, []byte(body), 0o755)
 }
 
 func setupSupervisorHelperRuntime(t *testing.T) (string, *store.Store, string) {
+	return setupSupervisorHelperRuntimeWithEnv(t)
+}
+
+func setupSupervisorHelperRuntimeWithEnv(t *testing.T, extraEnv ...string) (string, *store.Store, string) {
 	t.Helper()
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "data")
@@ -1334,7 +1434,7 @@ func setupSupervisorHelperRuntime(t *testing.T) (string, *store.Store, string) {
 		t.Fatal(err)
 	}
 	entry := "fixture-entry"
-	if err := writeSupervisorHelperEntry(filepath.Join(serviceRuntime, entry)); err != nil {
+	if err := writeSupervisorHelperEntry(filepath.Join(serviceRuntime, entry), extraEnv...); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.UpsertService(ctx, domain.Service{ID: "echo", Name: "Echo", PackageSource: "fixture", PackageArtifactPath: "pkg", PackageSHA256: "pkgsha", DescriptorPath: "desc", DescriptorSHA256: "descsha", DescriptorVersion: "descsha", NodeEntry: entry}); err != nil {
@@ -1344,6 +1444,9 @@ func setupSupervisorHelperRuntime(t *testing.T) (string, *store.Store, string) {
 }
 
 func runSupervisorHelper() {
+	if os.Getenv("OCTOBUS_SUPERVISOR_HELPER_IGNORE_INTERRUPT") == "1" {
+		signal.Ignore(os.Interrupt)
+	}
 	args := os.Args
 	sep := 0
 	for i, arg := range args {
@@ -1367,6 +1470,13 @@ func runSupervisorHelper() {
 	}
 	if _, err := strconv.Atoi(port); err != nil {
 		os.Exit(2)
+	}
+	if raw := os.Getenv("OCTOBUS_SUPERVISOR_HELPER_START_DELAY"); raw != "" {
+		delay, err := time.ParseDuration(raw)
+		if err != nil {
+			os.Exit(2)
+		}
+		time.Sleep(delay)
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:"+port)
 	if err != nil {
