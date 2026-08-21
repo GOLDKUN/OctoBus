@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -24,6 +25,8 @@ import (
 
 var ErrUnsupportedRuntimeControl = errors.New("on-demand runtime mode does not support persistent runtime control")
 
+var errProcessStopTimeout = errors.New("process stop timed out")
+
 type Supervisor struct {
 	DataDir           string
 	Store             *store.Store
@@ -33,6 +36,11 @@ type Supervisor struct {
 	mu          sync.Mutex
 	procs       map[string]*processState
 	generations map[string]int64
+
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
+	wg              sync.WaitGroup
+	restartDelay    func(int) time.Duration
 }
 
 type processState struct {
@@ -55,7 +63,17 @@ func New(dataDir string, st *store.Store) *Supervisor {
 	if abs, err := filepath.Abs(dataDir); err == nil {
 		dataDir = abs
 	}
-	return &Supervisor{DataDir: dataDir, Store: st, Logger: daemonlog.Nop(), procs: map[string]*processState{}, generations: map[string]int64{}}
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	return &Supervisor{
+		DataDir:         dataDir,
+		Store:           st,
+		Logger:          daemonlog.Nop(),
+		procs:           map[string]*processState{},
+		generations:     map[string]int64{},
+		lifecycleCtx:    lifecycleCtx,
+		lifecycleCancel: lifecycleCancel,
+		restartDelay:    backoff,
+	}
 }
 
 func (s *Supervisor) CreateInstance(ctx context.Context, req CreateInstanceRequest) (domain.Instance, error) {
@@ -189,6 +207,11 @@ func (s *Supervisor) Start(ctx context.Context, instanceID string) error {
 }
 
 func (s *Supervisor) startWithAttempt(ctx context.Context, instanceID string, restartAttempt int, generation int64) error {
+	ctx, finishOperation, err := s.beginOperation(ctx)
+	if err != nil {
+		return err
+	}
+	defer finishOperation()
 	inst, err := s.Store.GetInstance(ctx, instanceID)
 	if err != nil {
 		return err
@@ -285,21 +308,52 @@ func (s *Supervisor) startWithAttempt(ctx context.Context, instanceID string, re
 		return err
 	}
 	logger.Info("instance_started", "instance_id", instanceID, "pid", pid, "listen_addr", addr)
-	s.mu.Lock()
 	state := &processState{cmd: cmd, done: make(chan struct{}), attempt: restartAttempt, generation: generation}
+	s.mu.Lock()
+	if err := s.lifecycleErrLocked(); err != nil {
+		s.mu.Unlock()
+		s.cleanupFailedStart(instanceID, state, stdout, stderr)
+		_ = s.persistStoppedInstance(ctx, inst, true)
+		startErr = err
+		return err
+	}
 	s.procs[instanceID] = state
 	s.mu.Unlock()
 	if err := waitHealth(ctx, addr, 5*time.Second); err != nil {
-		inst.Status = domain.StatusFailed
-		_ = s.Store.UpsertInstance(ctx, inst)
+		if ctx.Err() != nil && s.lifecycleErr() != nil {
+			_ = s.persistStoppedInstance(ctx, inst, true)
+		} else {
+			inst.Status = domain.StatusFailed
+			_ = s.Store.UpsertInstance(ctx, inst)
+		}
 		s.cleanupFailedStart(instanceID, state, stdout, stderr)
 		logger.Warn("instance_health_failed", "instance_id", instanceID, "listen_addr", addr, "error", err)
 		startErr = err
 		return err
 	}
 	logger.Info("instance_health_ready", "instance_id", instanceID, "listen_addr", addr)
+	s.mu.Lock()
+	if s.procs[instanceID] != state {
+		s.mu.Unlock()
+		s.cleanupFailedStart(instanceID, state, stdout, stderr)
+		_ = s.persistStoppedInstance(ctx, inst, true)
+		startErr = context.Canceled
+		return startErr
+	}
+	if err := s.lifecycleErrLocked(); err != nil {
+		s.mu.Unlock()
+		s.cleanupFailedStart(instanceID, state, stdout, stderr)
+		_ = s.persistStoppedInstance(ctx, inst, true)
+		startErr = err
+		return err
+	}
+	s.wg.Add(1)
+	s.mu.Unlock()
 	s.notifyInstanceChanged(instanceID)
-	go s.wait(instanceID, state, stdout, stderr)
+	go func() {
+		defer s.wg.Done()
+		s.wait(instanceID, state, stdout, stderr)
+	}()
 	return nil
 }
 
@@ -327,6 +381,80 @@ func (s *Supervisor) Stop(ctx context.Context, instanceID string) error {
 		return err
 	}
 	return s.stopProcess(ctx, inst, false)
+}
+
+func (s *Supervisor) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	logger := s.logger()
+	logger.Info("supervisor_shutdown_started")
+	ids := map[string]struct{}{}
+	s.mu.Lock()
+	if s.lifecycleCancel != nil {
+		s.lifecycleCancel()
+	}
+	for id := range s.procs {
+		ids[id] = struct{}{}
+	}
+	for id := range s.generations {
+		ids[id] = struct{}{}
+		s.nextGenerationLocked(id)
+	}
+	s.mu.Unlock()
+
+	instances, err := s.Store.ListInstances(ctx)
+	var errs []error
+	if err != nil {
+		errs = append(errs, fmt.Errorf("list instances for supervisor shutdown: %w", err))
+	} else {
+		for _, inst := range instances {
+			svc, getErr := s.Store.GetService(ctx, inst.ServiceID)
+			if getErr != nil {
+				errs = append(errs, fmt.Errorf("%s: get service for supervisor shutdown: %w", inst.ID, getErr))
+				continue
+			}
+			if shouldStopOnShutdown(inst, svc) {
+				ids[inst.ID] = struct{}{}
+			}
+		}
+	}
+
+	errs = append(errs, RunBounded(sortedKeys(ids), 4, func(id string) error {
+		inst, getErr := s.Store.GetInstance(ctx, id)
+		if getErr != nil {
+			return fmt.Errorf("%s: get instance for supervisor shutdown: %w", id, getErr)
+		}
+		svc, getErr := s.Store.GetService(ctx, inst.ServiceID)
+		if getErr != nil {
+			return fmt.Errorf("%s: get service for supervisor shutdown: %w", id, getErr)
+		}
+		if svc.RuntimeMode != domain.RuntimeModeLongRunning {
+			return nil
+		}
+		if err := s.stopProcess(ctx, inst, inst.Enabled); err != nil {
+			return fmt.Errorf("%s: stop process for supervisor shutdown: %w", id, err)
+		}
+		return nil
+	})...)
+
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		errs = append(errs, ctx.Err())
+	}
+	err = errors.Join(errs...)
+	if err != nil {
+		logger.Warn("supervisor_shutdown_failed", "error", err)
+		return err
+	}
+	logger.Info("supervisor_shutdown_done")
+	return nil
 }
 
 func (s *Supervisor) Restart(ctx context.Context, instanceID string) error {
@@ -393,35 +521,39 @@ func (s *Supervisor) rejectOnDemandRuntimeControl(ctx context.Context, serviceID
 }
 
 func (s *Supervisor) stopProcess(ctx context.Context, inst domain.Instance, enabled bool) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	logger := s.logger()
 	logger.Info("instance_stopping", "instance_id", inst.ID)
 	inst.Enabled = enabled
 	inst.Status = domain.StatusStopped
 	inst.PID = nil
+	inst.ListenAddr = ""
 	s.mu.Lock()
 	s.nextGenerationLocked(inst.ID)
 	state := s.procs[inst.ID]
 	delete(s.procs, inst.ID)
 	s.mu.Unlock()
+	var stopErr error
 	if state != nil && state.cmd.Process != nil {
 		_ = state.cmd.Process.Signal(os.Interrupt)
-		select {
-		case <-state.done:
-		case <-time.After(2 * time.Second):
+		if err := waitProcessDone(ctx, state.done, 2*time.Second); err != nil {
 			_ = state.cmd.Process.Kill()
-			select {
-			case <-state.done:
-			case <-time.After(2 * time.Second):
+			if killErr := waitProcessDone(ctx, state.done, 2*time.Second); killErr != nil {
+				stopErr = killErr
+			} else if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				stopErr = err
 			}
 		}
 	}
-	if err := s.Store.UpsertInstance(ctx, inst); err != nil {
+	if err := s.persistStoppedInstance(ctx, inst, enabled); err != nil {
 		logger.Error("instance_stop_failed", "instance_id", inst.ID, "error", err)
-		return err
+		return errors.Join(stopErr, err)
 	}
 	s.notifyInstanceChanged(inst.ID)
 	logger.Info("instance_stopped", "instance_id", inst.ID)
-	return nil
+	return stopErr
 }
 
 func (s *Supervisor) RecoverEnabled(ctx context.Context) (int, error) {
@@ -534,9 +666,12 @@ func (s *Supervisor) wait(instanceID string, state *processState, stdout, stderr
 		delete(s.procs, instanceID)
 	}
 	s.mu.Unlock()
-	ctx := context.Background()
+	ctx := s.lifecycleContext()
+	if ctx.Err() != nil {
+		return
+	}
 	inst, getErr := s.Store.GetInstance(ctx, instanceID)
-	if getErr != nil || !inst.Enabled || current != state {
+	if getErr != nil || !inst.Enabled || current != state || ctx.Err() != nil {
 		return
 	}
 	s.logger().Warn("instance_exited", "instance_id", instanceID, "pid", processPID(state.cmd), "attempt", state.attempt+1, "error", err)
@@ -546,7 +681,7 @@ func (s *Supervisor) wait(instanceID string, state *processState, stdout, stderr
 		_ = s.Store.UpsertInstance(ctx, inst)
 		s.notifyInstanceChanged(instanceID)
 		s.logger().Warn("instance_degraded", "instance_id", instanceID, "attempt", state.attempt+1)
-		go s.restartAfterBackoff(instanceID, state.attempt+1, state.generation)
+		s.scheduleRestartAfterBackoff(instanceID, state.attempt+1, state.generation)
 		return
 	}
 	inst.Status = domain.StatusDegraded
@@ -554,23 +689,43 @@ func (s *Supervisor) wait(instanceID string, state *processState, stdout, stderr
 	_ = s.Store.UpsertInstance(ctx, inst)
 	s.notifyInstanceChanged(instanceID)
 	s.logger().Warn("instance_degraded", "instance_id", instanceID, "attempt", state.attempt+1)
-	go s.restartAfterBackoff(instanceID, state.attempt+1, state.generation)
+	s.scheduleRestartAfterBackoff(instanceID, state.attempt+1, state.generation)
+}
+
+func (s *Supervisor) scheduleRestartAfterBackoff(instanceID string, attempt int, generation int64) {
+	s.mu.Lock()
+	if err := s.lifecycleErrLocked(); err != nil {
+		s.mu.Unlock()
+		return
+	}
+	s.wg.Add(1)
+	s.mu.Unlock()
+	go func() {
+		defer s.wg.Done()
+		s.restartAfterBackoff(instanceID, attempt, generation)
+	}()
 }
 
 func (s *Supervisor) restartAfterBackoff(instanceID string, attempt int, generation int64) {
-	delay := backoff(attempt)
+	ctx := s.lifecycleContext()
+	delay := s.backoff(attempt)
 	s.logger().Warn("instance_restart_scheduled", "instance_id", instanceID, "attempt", attempt+1, "delay", delay.String())
-	time.Sleep(delay)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-timer.C:
+	}
 	if !s.generationMatches(instanceID, generation) {
 		return
 	}
-	ctx := context.Background()
 	inst, err := s.Store.GetInstance(ctx, instanceID)
 	if err != nil || !inst.Enabled {
 		return
 	}
 	if err := s.startWithAttempt(ctx, instanceID, attempt, generation); err != nil {
-		if !s.generationMatches(instanceID, generation) {
+		if ctx.Err() != nil || !s.generationMatches(instanceID, generation) {
 			return
 		}
 		s.logger().Warn("instance_degraded", "instance_id", instanceID, "attempt", attempt+1)
@@ -578,7 +733,7 @@ func (s *Supervisor) restartAfterBackoff(instanceID string, attempt int, generat
 		inst.PID = nil
 		_ = s.Store.UpsertInstance(ctx, inst)
 		s.notifyInstanceChanged(instanceID)
-		go s.restartAfterBackoff(instanceID, attempt+1, generation)
+		s.scheduleRestartAfterBackoff(instanceID, attempt+1, generation)
 	}
 }
 
@@ -594,6 +749,122 @@ func (s *Supervisor) generationMatches(instanceID string, generation int64) bool
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.generations[instanceID] == generation
+}
+
+func (s *Supervisor) beginOperation(ctx context.Context) (context.Context, func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.mu.Lock()
+	if err := s.lifecycleErrLocked(); err != nil {
+		s.mu.Unlock()
+		return nil, nil, err
+	}
+	lifecycleCtx := s.lifecycleCtx
+	if lifecycleCtx == nil {
+		lifecycleCtx = context.Background()
+	}
+	opCtx, cancel := context.WithCancel(ctx)
+	s.wg.Add(1)
+	s.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-lifecycleCtx.Done():
+			cancel()
+		case <-opCtx.Done():
+		}
+	}()
+	finish := func() {
+		cancel()
+		<-done
+		s.wg.Done()
+	}
+	return opCtx, finish, nil
+}
+
+func (s *Supervisor) lifecycleContext() context.Context {
+	if s.lifecycleCtx == nil {
+		return context.Background()
+	}
+	return s.lifecycleCtx
+}
+
+func (s *Supervisor) lifecycleErr() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lifecycleErrLocked()
+}
+
+func (s *Supervisor) lifecycleErrLocked() error {
+	if s.lifecycleCtx == nil {
+		return nil
+	}
+	return s.lifecycleCtx.Err()
+}
+
+func (s *Supervisor) backoff(attempt int) time.Duration {
+	if s.restartDelay == nil {
+		return backoff(attempt)
+	}
+	return s.restartDelay(attempt)
+}
+
+func (s *Supervisor) persistStoppedInstance(ctx context.Context, inst domain.Instance, enabled bool) error {
+	inst.Enabled = enabled
+	inst.Status = domain.StatusStopped
+	inst.PID = nil
+	inst.ListenAddr = ""
+	storeCtx := ctx
+	if storeCtx == nil {
+		storeCtx = context.Background()
+	}
+	if storeCtx.Err() != nil {
+		var cancel context.CancelFunc
+		storeCtx, cancel = context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+	}
+	return s.Store.UpsertInstance(storeCtx, inst)
+}
+
+func waitProcessDone(ctx context.Context, done <-chan struct{}, timeout time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return errProcessStopTimeout
+	}
+}
+
+func shouldStopOnShutdown(inst domain.Instance, svc domain.Service) bool {
+	if svc.RuntimeMode != domain.RuntimeModeLongRunning {
+		return false
+	}
+	if inst.PID != nil {
+		return true
+	}
+	if !inst.Enabled {
+		return false
+	}
+	return inst.Status == domain.StatusStarting || inst.Status == domain.StatusRunning || inst.Status == domain.StatusDegraded || inst.Status == domain.StatusFailed
+}
+
+func sortedKeys(keys map[string]struct{}) []string {
+	out := make([]string, 0, len(keys))
+	for key := range keys {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (s *Supervisor) notifyInstanceChanged(instanceID string) {
@@ -641,6 +912,9 @@ func waitHealth(ctx context.Context, addr string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("instance health check failed at %s: %w", addr, err)
+		}
 		attemptCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err == nil {
@@ -656,6 +930,9 @@ func waitHealth(ctx context.Context, addr string, timeout time.Duration) error {
 			lastErr = err
 		}
 		cancel()
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("instance health check failed at %s: %w", addr, err)
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	if lastErr == nil {

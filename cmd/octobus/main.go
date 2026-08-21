@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"octobus/internal/accesslog"
 	"octobus/internal/admin"
@@ -62,10 +63,11 @@ func newServeCommand(addr *string) *cobra.Command {
 }
 
 type serveOptions struct {
-	dataDir string
-	addr    string
-	stderr  io.Writer
-	logger  *slog.Logger
+	dataDir          string
+	addr             string
+	stderr           io.Writer
+	logger           *slog.Logger
+	startupInventory func(context.Context, *slog.Logger, *store.Store) error
 }
 
 func serve(opts serveOptions) error {
@@ -103,11 +105,24 @@ func serve(opts serveOptions) error {
 	defer stop()
 	logger.Info("recover_enabled_started")
 	recovered, err := sup.RecoverEnabled(ctx)
+	supervisorShutdownNeeded := true
+	shutdownSupervisorOnce := func() {
+		if !supervisorShutdownNeeded {
+			return
+		}
+		supervisorShutdownNeeded = false
+		shutdownSupervisor(logger, sup)
+	}
+	defer shutdownSupervisorOnce()
 	if err != nil {
 		logger.Warn("recover_enabled_failed", "error", err)
 	}
 	logger.Info("recover_enabled_done", "count", recovered)
-	if err := logStartupInventory(ctx, logger, st); err != nil {
+	startupInventory := logStartupInventory
+	if opts.startupInventory != nil {
+		startupInventory = opts.startupInventory
+	}
+	if err := startupInventory(ctx, logger, st); err != nil {
 		return err
 	}
 	adminServer := &admin.Server{Store: st, Importer: &packageimport.Importer{DataDir: dataDir, Store: st}, Supervisor: sup, Gateway: gateway, AccessLogPath: filepath.Join(dataDir, accesslog.FileName), Logger: logger}
@@ -134,6 +149,7 @@ func serve(opts serveOptions) error {
 			logger.Info("daemon_shutdown_started")
 			grpcServer.GracefulStop()
 			_ = gateway.Close()
+			shutdownSupervisorOnce()
 			logger.Info("daemon_shutdown_done")
 			return err
 		}
@@ -142,10 +158,19 @@ func serve(opts serveOptions) error {
 		_ = publicServer.Shutdown(context.Background())
 		grpcServer.GracefulStop()
 		_ = gateway.Close()
+		shutdownSupervisorOnce()
 		<-serverErr
 		logger.Info("daemon_shutdown_done")
 	}
 	return nil
+}
+
+func shutdownSupervisor(logger *slog.Logger, sup *supervisor.Supervisor) {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := sup.Shutdown(shutdownCtx); err != nil {
+		logger.Warn("daemon_supervisor_shutdown_failed", "error", err)
+	}
 }
 
 func logStartupInventory(ctx context.Context, logger *slog.Logger, st *store.Store) error {
