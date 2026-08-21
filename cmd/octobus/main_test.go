@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -18,7 +21,19 @@ import (
 	"octobus/internal/cli"
 	"octobus/internal/domain"
 	"octobus/internal/store"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
 )
+
+func TestMain(m *testing.M) {
+	if os.Getenv("OCTOBUS_CMD_HELPER") == "1" {
+		runCmdHelper()
+		return
+	}
+	os.Exit(m.Run())
+}
 
 func TestRootAddrFlagOverridesAdminCommands(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +67,44 @@ func TestServeReturnsPublicBindError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "address already in use") {
 		t.Fatalf("expected public bind error, got %v", err)
 	}
+}
+
+func TestServeShutsDownRecoveredInstancesWhenPublicBindFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("helper process fixture")
+	}
+	dataDir, instanceID := setupServeRecoverFixture(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	err = serve(serveOptions{dataDir: dataDir, addr: ln.Addr().String()})
+	if err == nil || !strings.Contains(err.Error(), "address already in use") {
+		t.Fatalf("expected public bind error, got %v", err)
+	}
+	assertRecoveredInstanceStopped(t, dataDir, instanceID)
+}
+
+func TestServeShutsDownRecoveredInstancesWhenStartupInventoryFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("helper process fixture")
+	}
+	dataDir, instanceID := setupServeRecoverFixture(t)
+	inventoryErr := errors.New("startup inventory failed")
+
+	err := serve(serveOptions{
+		dataDir: dataDir,
+		addr:    "127.0.0.1:0",
+		startupInventory: func(context.Context, *slog.Logger, *store.Store) error {
+			return inventoryErr
+		},
+	})
+	if !errors.Is(err, inventoryErr) {
+		t.Fatalf("expected startup inventory error, got %v", err)
+	}
+	assertRecoveredInstanceStopped(t, dataDir, instanceID)
 }
 
 func TestRunReturnsCommandError(t *testing.T) {
@@ -265,4 +318,114 @@ func waitForHTTP(t *testing.T, url string) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("server did not become ready at %s", url)
+}
+
+func setupServeRecoverFixture(t *testing.T) (string, string) {
+	t.Helper()
+	dataDir := filepath.Join(t.TempDir(), "data")
+	st, err := store.Open(filepath.Join(dataDir, "octobus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+	serviceRuntime := filepath.Join(dataDir, "artifacts/services/echo/runtime")
+	if err := os.MkdirAll(serviceRuntime, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entry := "fixture-entry"
+	if err := writeCmdHelperEntry(filepath.Join(serviceRuntime, entry)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertService(ctx, domain.Service{
+		ID:                "echo",
+		Name:              "Echo",
+		PackageSource:     "fixture",
+		PackageSHA256:     "pkgsha",
+		DescriptorPath:    "desc",
+		DescriptorSHA256:  "descsha",
+		DescriptorVersion: "descsha",
+		NodeEntry:         entry,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	instanceID := "echo-test"
+	if err := st.UpsertInstance(ctx, domain.Instance{
+		ID:         instanceID,
+		ServiceID:  "echo",
+		Name:       "Echo Test",
+		Enabled:    true,
+		Status:     domain.StatusStopped,
+		NodeEntry:  entry,
+		ConfigJSON: json.RawMessage(`{}`),
+		SecretJSON: json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return dataDir, instanceID
+}
+
+func writeCmdHelperEntry(path string) error {
+	body := fmt.Sprintf("#!/bin/sh\nexec env OCTOBUS_CMD_HELPER=1 %q -test.run=TestMain -- \"$@\"\n", os.Args[0])
+	return os.WriteFile(path, []byte(body), 0o755)
+}
+
+func assertRecoveredInstanceStopped(t *testing.T, dataDir, instanceID string) {
+	t.Helper()
+	st, err := store.Open(filepath.Join(dataDir, "octobus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	inst, err := st.GetInstance(context.Background(), instanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inst.Enabled || inst.Status != domain.StatusStopped || inst.PID != nil || inst.ListenAddr != "" {
+		t.Fatalf("recovered instance was not stopped cleanly: %+v", inst)
+	}
+}
+
+func runCmdHelper() {
+	args := os.Args
+	sep := 0
+	for i, arg := range args {
+		if arg == "--" {
+			sep = i
+			break
+		}
+	}
+	if sep == 0 {
+		os.Exit(2)
+	}
+	port := ""
+	if sep+2 >= len(args) || args[sep+1] != "--runtime" || args[sep+2] != "serve" {
+		os.Exit(2)
+	}
+	for i := sep + 1; i < len(args)-1; i++ {
+		if args[i] == "--port" {
+			port = args[i+1]
+			break
+		}
+	}
+	if _, err := strconv.Atoi(port); err != nil {
+		os.Exit(2)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:"+port)
+	if err != nil {
+		os.Exit(2)
+	}
+	srv := grpc.NewServer()
+	healthServer := health.NewServer()
+	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	grpc_health_v1.RegisterHealthServer(srv, healthServer)
+	go func() {
+		_ = srv.Serve(ln)
+	}()
+	waitForInterrupt()
+	srv.Stop()
+}
+
+func waitForInterrupt() {
+	select {}
 }
