@@ -130,6 +130,11 @@ await handlers['Zhihu_Open_Api.Zhihu_Open_Api/GetHotList']({
 });
 ```
 
+On the wire (Connect/gRPC/CLI) multi-word fields use the protobuf JSON
+camelCase form, e.g. `contentType`, `knowledgeBaseId`, `searchDb`, and
+`favlistUrlToken`. The handlers also accept the snake_case proto names and the
+camelCase form interchangeably.
+
 ## Behavior Notes
 
 - Zhihu business errors are mapped to gRPC errors: `20001` → `UNAUTHENTICATED`, `30001`/`30002` → `RESOURCE_EXHAUSTED`,

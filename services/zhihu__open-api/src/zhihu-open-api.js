@@ -153,7 +153,7 @@ export const buildZhihuSearchQuery = (request = {}) => ({
 export const buildGlobalSearchQuery = (request = {}) => ({
   Query: requiredString(request.query ?? request.Query, 'Query'),
   Count: clampedPositiveInteger(request.count ?? request.Count, 'Count', 20, 10),
-  SearchDB: enumValue(request.search_db ?? request.SearchDB, 'SearchDB', SEARCH_DB_VALUES, 'all'),
+  SearchDB: enumValue(request.search_db ?? request.searchDb ?? request.SearchDB, 'SearchDB', SEARCH_DB_VALUES, 'all'),
   Filter: asString(request.filter ?? request.Filter),
 });
 
@@ -185,11 +185,15 @@ export const buildKnowledgeSearchBody = (request = {}) => {
 };
 
 export const buildUserContentsQuery = (request = {}) => ({
-  ContentType: enumValue(request.content_type ?? request.ContentType, 'ContentType', CONTENT_TYPE_VALUES),
+  ContentType: enumValue(
+    request.content_type ?? request.contentType ?? request.ContentType,
+    'ContentType',
+    CONTENT_TYPE_VALUES,
+  ),
   Offset: offsetParam(request.offset ?? request.Offset),
   Limit: clampedPositiveInteger(request.limit ?? request.Limit, 'Limit', 50, 20),
-  SortField: enumValue(request.sort_field ?? request.SortField, 'SortField', SORT_FIELD_VALUES, 'ts'),
-  SortOrder: enumValue(request.sort_order ?? request.SortOrder, 'SortOrder', SORT_ORDER_VALUES, 'desc'),
+  SortField: enumValue(request.sort_field ?? request.sortField ?? request.SortField, 'SortField', SORT_FIELD_VALUES, 'ts'),
+  SortOrder: enumValue(request.sort_order ?? request.sortOrder ?? request.SortOrder, 'SortOrder', SORT_ORDER_VALUES, 'desc'),
 });
 
 export const buildUserFolloweesQuery = (request = {}) => ({

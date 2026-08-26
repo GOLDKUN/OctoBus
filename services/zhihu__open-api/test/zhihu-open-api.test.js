@@ -496,3 +496,34 @@ test('respects config timeouts, custom headers, TLS flags, and legacy aliases', 
   assert.equal(settings.headers.a, 'b');
   assert.equal(settings.accessSecret, 's');
 });
+
+test('accepts the camelCase field names the SDK delivers on the wire', async () => {
+  // The Node SDK decodes gRPC/CLI requests through @bufbuild/protobuf
+  // fromJson/fromBinary, which keys message fields by their JSON (camelCase)
+  // names. Verify the handlers read those keys for multi-word fields.
+  const calls = [];
+  await handlers[METHODS.GET_USER_CONTENTS](context([
+    response(okData({ Items: [], Paging: { IsEnd: true, Totals: 0 } })),
+  ], { contentType: 'all', offset: 20, limit: 5, sortField: 'like_count', sortOrder: 'asc', oauthToken: 'camel-token' }, calls));
+  assert.equal(
+    calls[0].url,
+    'https://developer.zhihu.com/api/v1/user/contents?ContentType=all&Offset=20&Limit=5&SortField=like_count&SortOrder=asc',
+  );
+  assert.equal(calls[0].options.headers['X-OAuth-Token'], 'camel-token');
+
+  const calls2 = [];
+  await handlers[METHODS.GLOBAL_SEARCH](context([response(okData({}))], { query: 'x', searchDb: 'realtime' }, calls2));
+  assert.match(calls2[0].url, /SearchDB=realtime/);
+
+  const calls3 = [];
+  await handlers[METHODS.LIST_KNOWLEDGE_BASE_ITEMS](context([response(okData({}))], { knowledgeBaseId: 'kb-9' }, calls3));
+  assert.match(calls3[0].url, /knowledge\/bases\/kb-9\/items/);
+
+  const calls4 = [];
+  await handlers[METHODS.SEARCH_KNOWLEDGE](context([response(okData({}))], {
+    query: 'q',
+    knowledgeBaseIds: ['kb-1'],
+    recallScopes: ['personal'],
+  }, calls4));
+  assert.deepEqual(JSON.parse(calls4[0].options.body).KnowledgeBaseIDs, ['kb-1']);
+});
