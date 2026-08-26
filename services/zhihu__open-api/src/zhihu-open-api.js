@@ -6,6 +6,7 @@ import { GrpcError, createTlsDispatcher, grpcCodeFor, normalizeTimeoutMs } from 
 const PREFIX = 'Zhihu_Open_Api.Zhihu_Open_Api';
 export const METHODS = {
   CHECK_CONNECTIVITY: `${PREFIX}/CheckConnectivity`,
+  GET_QUOTA: `${PREFIX}/GetQuota`,
   ZHIHU_SEARCH: `${PREFIX}/ZhihuSearch`,
   GLOBAL_SEARCH: `${PREFIX}/GlobalSearch`,
   GET_HOT_LIST: `${PREFIX}/GetHotList`,
@@ -160,6 +161,19 @@ export const buildGlobalSearchQuery = (request = {}) => ({
 export const buildHotListQuery = (request = {}) => ({
   Limit: clampedPositiveInteger(request.limit ?? request.Limit, 'Limit', 30, 30),
 });
+
+// APIIDs is a comma-separated list of quota item ids. Normalize whitespace and
+// drop empty tokens; pass through unknown ids so future Zhihu quota items work
+// without a service change (the upstream validates the ids).
+export const buildGetQuotaQuery = (request = {}) => {
+  const raw = asString(request.api_ids ?? request.apiIds ?? request.APIIDs);
+  if (!raw) return {};
+  const ids = raw.split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(',');
+  return ids ? { APIIDs: ids } : {};
+};
 
 export const buildKnowledgeBasesQuery = (request = {}) => ({
   Scope: enumValue(request.scope ?? request.Scope, 'Scope', SCOPE_VALUES, 'all'),
@@ -411,6 +425,10 @@ export const handlers = {
     const result = await callApi(settings, 'GET', '/api/v1/content/hot_list', { query: buildQuery(buildHotListQuery(req)) });
     return data(result.data);
   }),
+  [METHODS.GET_QUOTA]: wrap(async (settings, req) => {
+    const result = await callApi(settings, 'GET', '/api/v1/quota', { query: buildQuery(buildGetQuotaQuery(req)) });
+    return data(result.data);
+  }),
   [METHODS.LIST_KNOWLEDGE_BASES]: wrap(async (settings, req) => {
     const result = await callApi(settings, 'GET', '/api/v1/knowledge/bases', { query: buildQuery(buildKnowledgeBasesQuery(req)) });
     return data(result.data);
@@ -479,6 +497,7 @@ export const handlers = {
 export const _test = {
   buildFavlistContentsQuery,
   buildGlobalSearchQuery,
+  buildGetQuotaQuery,
   buildHotListQuery,
   buildHeaders,
   buildKnowledgeBasesQuery,

@@ -13,6 +13,9 @@ option go_package = "miner/grpc-service/Zhihu_Open_Api";
 service Zhihu_Open_Api {
   // 校验 Access Secret 凭证并返回连通状态。
   rpc CheckConnectivity(EmptyRequest) returns (ConnectivityResponse) {}
+  // 额度查询。返回当前 Access Secret 所属账号自然日内的各项能力限免额度，
+  // 该查询不消耗业务额度。Data 为额度项数组。
+  rpc GetQuota(GetQuotaRequest) returns (JsonListResponse) {}
 
   // 知乎站内搜索。返回与查询相关的问题、回答或文章结果。
   rpc ZhihuSearch(ZhihuSearchRequest) returns (JsonResponse) {}
@@ -43,6 +46,14 @@ service Zhihu_Open_Api {
 }
 
 message EmptyRequest {}
+
+// 额度查询请求
+message GetQuotaRequest {
+  // 逗号分隔的 API ID，如 "knowledge,zhihu_search"；不传时返回全部可展示额度。
+  // 可查：global_search / zhihu_search / hot_list / user_data / zhida_openai /
+  // knowledge / tools
+  string api_ids = 1;
+}
 
 message ConnectivityResponse {
   bool reachable = 1;
@@ -170,4 +181,9 @@ message GetFavlistContentsRequest {
 // 通用 JSON 响应。data 为知乎开放平台响应的 Data 对象，结构随方法不同而变化。
 message JsonResponse {
   google.protobuf.Struct data = 1;
+}
+
+// 通用 JSON 列表响应。data 为知乎开放平台响应的 Data 数组（如额度查询）。
+message JsonListResponse {
+  google.protobuf.ListValue data = 1;
 }

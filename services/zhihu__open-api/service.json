@@ -23,6 +23,10 @@
           "name": "check-connectivity",
           "description": "Verify Zhihu Access Secret credentials without exposing the token."
         },
+        "Zhihu_Open_Api.Zhihu_Open_Api/GetQuota": {
+          "name": "get-quota",
+          "description": "Read the daily free quota remaining for each Zhihu capability."
+        },
         "Zhihu_Open_Api.Zhihu_Open_Api/ZhihuSearch": {
           "name": "zhihu-search",
           "description": "Search within Zhihu for questions, answers, and articles."

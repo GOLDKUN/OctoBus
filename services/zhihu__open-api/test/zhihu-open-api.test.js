@@ -154,6 +154,36 @@ test('GetHotList clamps Limit and returns Data', async () => {
   assert.equal(calls2[0].url, 'https://developer.zhihu.com/api/v1/content/hot_list?Limit=30');
 });
 
+test('GetQuota builds the APIIDs query and returns the array Data', async () => {
+  // Specific quota items (comma list, whitespace-tolerant, camelCase wire key).
+  const calls = [];
+  const result = await handlers[METHODS.GET_QUOTA](context([
+    response(okData([
+      { APIID: 'zhihu_search', APIName: '知乎搜索', TotalQuota: 500, TotalUsed: 12, RemainingQuota: 488 },
+      { APIID: 'hot_list', APIName: '热榜', TotalQuota: 30, TotalUsed: 30, RemainingQuota: 0 },
+    ])),
+  ], { apiIds: 'zhihu_search, hot_list' }, calls));
+
+  assert.equal(calls[0].url, 'https://developer.zhihu.com/api/v1/quota?APIIDs=zhihu_search%2Chot_list');
+  assert.equal(calls[0].options.method, 'GET');
+  assert.equal(result.data[0].APIID, 'zhihu_search');
+  assert.equal(result.data[1].RemainingQuota, 0);
+
+  // Snake_case alias and no APIIDs -> no query string (all quota items).
+  const calls2 = [];
+  await handlers[METHODS.GET_QUOTA](context([response(okData([]))], { api_ids: 'knowledge' }, calls2));
+  assert.equal(calls2[0].url, 'https://developer.zhihu.com/api/v1/quota?APIIDs=knowledge');
+
+  const calls3 = [];
+  await handlers[METHODS.GET_QUOTA](context([response(okData([]))], {}, calls3));
+  assert.equal(calls3[0].url, 'https://developer.zhihu.com/api/v1/quota');
+
+  // Whitespace/empty normalization drops empty tokens and trailing commas.
+  assert.deepEqual(_test.buildGetQuotaQuery({ apiIds: '  global_search, , hot_list, ' }), { APIIDs: 'global_search,hot_list' });
+  assert.deepEqual(_test.buildGetQuotaQuery({}), {});
+  assert.deepEqual(_test.buildGetQuotaQuery({ apiIds: '  ,  ' }), {});
+});
+
 test('ListKnowledgeBases validates Scope', async () => {
   const calls = [];
   const result = await handlers[METHODS.LIST_KNOWLEDGE_BASES](context([

@@ -83,6 +83,7 @@ All data methods return the upstream Zhihu `Data` object in the structured `Json
 | Method | URL | Description |
 |--------|-----|-------------|
 | `CheckConnectivity` | `GET /api/v1/content/hot_list?Limit=1` | Verify credentials and report reachability. |
+| `GetQuota` | `GET /api/v1/quota` | Daily free quota remaining for each Zhihu capability; does not consume quota. |
 | `ZhihuSearch` | `GET /api/v1/content/zhihu_search` | Search within Zhihu (questions, answers, articles). |
 | `GlobalSearch` | `GET /api/v1/content/global_search` | Search the whole web with optional filter expression. |
 | `GetHotList` | `GET /api/v1/content/hot_list` | Current Zhihu hot list. |
@@ -117,6 +118,7 @@ Request fields:
 | `sort_field` / `sort_order` | string | No | `like_count` or `ts`; `asc` or `desc`; defaults `ts` / `desc`. |
 | `favlist_url_token` | string | Yes for favlist contents | Favorites list URL token from `GetUserFavlists`. |
 | `oauth_token` | string | No | Per-request OAuth token override for user data methods. |
+| `api_ids` | string | No | Comma-separated quota API IDs for `GetQuota`; omit to return all. Valid ids: `global_search`, `zhihu_search`, `hot_list`, `user_data`, `zhida_openai`, `knowledge`, `tools`. |
 
 Runtime handler example:
 
@@ -141,6 +143,8 @@ camelCase form interchangeably.
   `40004` → `NOT_FOUND`, `40005`/`40006` → `FAILED_PRECONDITION`, `50002` → `UNAVAILABLE`, `10001` → `INVALID_ARGUMENT`,
   `90001` → `UNAVAILABLE`. HTTP 401/403/404/429 map to `UNAUTHENTICATED`/`PERMISSION_DENIED`/`NOT_FOUND`/`RESOURCE_EXHAUSTED`;
   other 4xx map to `INVALID_ARGUMENT`, and 5xx map to `UNAVAILABLE`.
+- `GetQuota` returns the upstream quota `Data` **array** in `JsonListResponse.data` (each item has `APIID`,
+  `APIName`, `TotalQuota`, `TotalUsed`, `RemainingQuota`). The other data methods return an object.
 - Timeouts map to `DEADLINE_EXCEEDED`; network failures map to `UNAVAILABLE`. Upload is a synchronous mutation: network
   failures and 5xx responses are marked `ambiguous` and never automatically retried.
 - Out-of-range `count`/`limit` values are clamped to the documented server defaults instead of being rejected, matching

@@ -218,6 +218,23 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Quota
+  if (method === 'GET' && url.pathname === '/api/v1/quota') {
+    const apiIds = url.searchParams.get('APIIDs');
+    const all = [
+      { APIID: 'global_search', APIName: '全网搜', TotalQuota: 500, TotalUsed: 3, RemainingQuota: 497 },
+      { APIID: 'zhihu_search', APIName: '知乎搜索', TotalQuota: 500, TotalUsed: 12, RemainingQuota: 488 },
+      { APIID: 'hot_list', APIName: '热榜', TotalQuota: 30, TotalUsed: 30, RemainingQuota: 0 },
+      { APIID: 'knowledge', APIName: '知识库', TotalQuota: 500, TotalUsed: 12, RemainingQuota: 488 },
+    ];
+    const items = apiIds
+      ? all.filter((item) => apiIds.split(',').map((s) => s.trim()).includes(item.APIID))
+      : all;
+    sendJson(res, 200, { Code: 0, Message: 'success', Data: items });
+    log('quota:', apiIds ?? 'all');
+    return;
+  }
+
   // Auth / error simulation
   if (method === 'GET' && url.pathname === '/api/v1/error/unauthorized') {
     sendJson(res, 200, { Code: 20001, Message: '鉴权失败', Data: {} });
