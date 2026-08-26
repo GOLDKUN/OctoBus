@@ -1,0 +1,77 @@
+{
+  "schema": "chaitin.octobus.service.v1",
+  "name": "zhihu-open-api",
+  "displayName": "Zhihu Open API",
+  "description": "OctoBus package for the Zhihu Open Platform — in-site and global search, hot list, knowledge base (RAG), and user data APIs.",
+  "runtime": {
+    "mode": "long-running"
+  },
+  "proto": {
+    "roots": [
+      "proto"
+    ],
+    "files": [
+      "proto/zhihu_open_api.proto"
+    ]
+  },
+  "configSchema": "config.schema.json",
+  "secretSchema": "secret.schema.json",
+  "sdk": {
+    "cli": {
+      "commands": {
+        "Zhihu_Open_Api.Zhihu_Open_Api/CheckConnectivity": {
+          "name": "check-connectivity",
+          "description": "Verify Zhihu Access Secret credentials without exposing the token."
+        },
+        "Zhihu_Open_Api.Zhihu_Open_Api/ZhihuSearch": {
+          "name": "zhihu-search",
+          "description": "Search within Zhihu for questions, answers, and articles."
+        },
+        "Zhihu_Open_Api.Zhihu_Open_Api/GlobalSearch": {
+          "name": "global-search",
+          "description": "Search the whole web with optional host and publish-time filters."
+        },
+        "Zhihu_Open_Api.Zhihu_Open_Api/GetHotList": {
+          "name": "get-hot-list",
+          "description": "Read the current Zhihu hot list of questions and articles."
+        },
+        "Zhihu_Open_Api.Zhihu_Open_Api/ListKnowledgeBases": {
+          "name": "list-knowledge-bases",
+          "description": "List knowledge bases created or subscribed by the current user."
+        },
+        "Zhihu_Open_Api.Zhihu_Open_Api/ListKnowledgeBaseItems": {
+          "name": "list-knowledge-base-items",
+          "description": "Page through the contents of a knowledge base."
+        },
+        "Zhihu_Open_Api.Zhihu_Open_Api/UploadKnowledgeFile": {
+          "name": "upload-knowledge-file",
+          "description": "Upload a file and mount it into a knowledge base after parsing."
+        },
+        "Zhihu_Open_Api.Zhihu_Open_Api/SearchKnowledge": {
+          "name": "search-knowledge",
+          "description": "Retrieve relevant document snippets from a knowledge base with RAG."
+        },
+        "Zhihu_Open_Api.Zhihu_Open_Api/GetUserContents": {
+          "name": "get-user-contents",
+          "description": "List the current or an authorized user's created content."
+        },
+        "Zhihu_Open_Api.Zhihu_Open_Api/GetUserFollowees": {
+          "name": "get-user-followees",
+          "description": "List who the current or an authorized user follows."
+        },
+        "Zhihu_Open_Api.Zhihu_Open_Api/GetUserCollections": {
+          "name": "get-user-collections",
+          "description": "List the current or an authorized user's recent collections."
+        },
+        "Zhihu_Open_Api.Zhihu_Open_Api/GetUserFavlists": {
+          "name": "get-user-favlists",
+          "description": "List the current or an authorized user's public favorites lists."
+        },
+        "Zhihu_Open_Api.Zhihu_Open_Api/GetFavlistContents": {
+          "name": "get-favlist-contents",
+          "description": "List public contents inside a favorites list."
+        }
+      }
+    }
+  }
+}
