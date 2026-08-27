@@ -605,6 +605,10 @@ const services = {
     entryFile: "../openinfra__openstack-yoga_2022-1/bin/openstack-yoga-2022-1.js",
     serviceModule: "../openinfra__openstack-yoga_2022-1/src/service.js",
   },
+  "zhihu-open-api": {
+    entryFile: "../zhihu__open-api/bin/zhihu-open-api.js",
+    serviceModule: "../zhihu__open-api/src/service.js",
+  },
 };
 
 const serviceNames = Object.keys(services);
