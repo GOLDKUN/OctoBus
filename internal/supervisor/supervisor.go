@@ -147,6 +147,11 @@ func (s *Supervisor) UpdateSecret(ctx context.Context, instanceID string, secret
 	if err := validateSecretSchema(svc.SecretSchemaPath, secret); err != nil {
 		return domain.Instance{}, err
 	}
+	if restart {
+		if err := s.rejectOnDemandRuntimeControl(ctx, inst.ServiceID); err != nil {
+			return domain.Instance{}, err
+		}
+	}
 	inst.SecretJSON = secret
 	inst.SecretSHA256 = domain.HashBytes(secret)
 	if err := s.Store.UpsertInstance(ctx, inst); err != nil {
@@ -154,9 +159,6 @@ func (s *Supervisor) UpdateSecret(ctx context.Context, instanceID string, secret
 	}
 	s.logger().Info("instance_secret_updated", "instance_id", instanceID, "secret_sha256", inst.SecretSHA256, "restart", restart)
 	if restart {
-		if err := s.rejectOnDemandRuntimeControl(ctx, inst.ServiceID); err != nil {
-			return domain.Instance{}, err
-		}
 		if err := s.Restart(ctx, instanceID); err != nil {
 			return domain.Instance{}, err
 		}
@@ -179,6 +181,11 @@ func (s *Supervisor) UpdateConfig(ctx context.Context, instanceID string, config
 	if err := validateConfigSchema(svc.ConfigSchemaPath, config); err != nil {
 		return domain.Instance{}, err
 	}
+	if restart {
+		if err := s.rejectOnDemandRuntimeControl(ctx, inst.ServiceID); err != nil {
+			return domain.Instance{}, err
+		}
+	}
 	if err := s.writeInstanceConfig(instanceID, config); err != nil {
 		return domain.Instance{}, err
 	}
@@ -189,9 +196,6 @@ func (s *Supervisor) UpdateConfig(ctx context.Context, instanceID string, config
 	}
 	s.logger().Info("instance_config_updated", "instance_id", instanceID, "config_sha256", inst.ConfigSHA256, "restart", restart)
 	if restart {
-		if err := s.rejectOnDemandRuntimeControl(ctx, inst.ServiceID); err != nil {
-			return domain.Instance{}, err
-		}
 		if err := s.Restart(ctx, instanceID); err != nil {
 			return domain.Instance{}, err
 		}
