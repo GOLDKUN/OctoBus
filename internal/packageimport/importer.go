@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"octobus/internal/descriptors"
 	"octobus/internal/domain"
@@ -29,7 +30,48 @@ type Importer struct {
 	DataDir string
 	Store   *store.Store
 
-	importMu sync.Mutex
+	importMu    sync.Mutex
+	importLocks map[string]*sync.Mutex
+}
+
+const staleImportDirAge = 24 * time.Hour
+
+func (i *Importer) lockService(serviceID string) func() {
+	i.importMu.Lock()
+	if i.importLocks == nil {
+		i.importLocks = make(map[string]*sync.Mutex)
+	}
+	lock := i.importLocks[serviceID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		i.importLocks[serviceID] = lock
+	}
+	i.importMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
+func sweepStaleImportDirs(root string) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	cutoff := time.Now().Add(-staleImportDirAge)
+	for _, entry := range entries {
+		if !entry.IsDir() || !(strings.HasPrefix(entry.Name(), ".staging-") || strings.Contains(entry.Name(), ".previous-")) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.ModTime().Before(cutoff) {
+			if err := os.RemoveAll(filepath.Join(root, entry.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 type Options struct {
@@ -135,12 +177,12 @@ func (i *Importer) Import(ctx context.Context, opts Options) (Result, error) {
 	if opts.Source == "" {
 		return Result{}, errors.New("service package source is required")
 	}
-	i.importMu.Lock()
-	defer i.importMu.Unlock()
-
 	serviceDir := filepath.Join(i.DataDir, "artifacts", "services", opts.ServiceID)
 	stagingBase := filepath.Join(i.DataDir, "artifacts", "services")
 	if err := os.MkdirAll(stagingBase, 0o755); err != nil {
+		return Result{}, err
+	}
+	if err := sweepStaleImportDirs(stagingBase); err != nil {
 		return Result{}, err
 	}
 	staging, err := os.MkdirTemp(stagingBase, ".staging-"+opts.ServiceID+"-")
@@ -198,7 +240,9 @@ func (i *Importer) Import(ctx context.Context, opts Options) (Result, error) {
 	if err := reportImportProgress(opts, ImportProgressEvent{Type: "status", Stage: "commit_service", Message: "Committing service", ServiceID: opts.ServiceID}); err != nil {
 		return Result{}, err
 	}
+	unlockService := i.lockService(opts.ServiceID)
 	stored, err := i.commitImportedService(ctx, svc, serviceDir, commitDir)
+	unlockService()
 	if err != nil {
 		return Result{}, err
 	}
@@ -376,15 +420,15 @@ func (i *Importer) ImportRecursive(ctx context.Context, opts Options) (Recursive
 	if opts.Name != "" {
 		return RecursiveResult{}, errors.New("name cannot be used with recursive import")
 	}
-	i.importMu.Lock()
-	defer i.importMu.Unlock()
-
 	baseSource, _, err := splitSourceServiceRoot(opts.Source)
 	if err != nil {
 		return RecursiveResult{}, err
 	}
 	stagingBase := filepath.Join(i.DataDir, "artifacts", "services")
 	if err := os.MkdirAll(stagingBase, 0o755); err != nil {
+		return RecursiveResult{}, err
+	}
+	if err := sweepStaleImportDirs(stagingBase); err != nil {
 		return RecursiveResult{}, err
 	}
 	staging, err := os.MkdirTemp(stagingBase, ".staging-recursive-")
@@ -489,7 +533,9 @@ func (i *Importer) ImportRecursive(ctx context.Context, opts Options) (Recursive
 		if err := reportImportProgress(opts, ImportProgressEvent{Type: "status", Stage: "commit_service", Message: "Committing service", ServiceID: candidate.ServiceID, Current: current, Total: len(candidates)}); err != nil {
 			return result, err
 		}
+		unlockService := i.lockService(candidate.ServiceID)
 		stored, err := i.commitImportedService(ctx, svc, serviceDir, commitDir)
+		unlockService()
 		if err != nil {
 			return result, fmt.Errorf("commit service %s: %w", candidate.ServiceID, err)
 		}
