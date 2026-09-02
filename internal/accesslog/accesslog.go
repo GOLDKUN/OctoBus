@@ -115,12 +115,6 @@ func FilterLines(r io.Reader, filter Filter, w io.Writer) error {
 	if err := validateFilterLimits(filter); err != nil {
 		return err
 	}
-	if filter.Limit < 0 {
-		return fmt.Errorf("limit must be non-negative")
-	}
-	if filter.Tail < 0 {
-		return fmt.Errorf("tail must be non-negative")
-	}
 	if filter.LimitSet && filter.TailSet {
 		return fmt.Errorf("limit and tail are mutually exclusive")
 	}
@@ -207,11 +201,8 @@ func validateFilterLimits(filter Filter) error {
 }
 
 func FollowFile(path string, filter Filter, w io.Writer, done <-chan struct{}) error {
-	if filter.Limit < 0 {
-		return fmt.Errorf("limit must be non-negative")
-	}
-	if filter.Tail < 0 {
-		return fmt.Errorf("tail must be non-negative")
+	if err := validateFilterLimits(filter); err != nil {
+		return err
 	}
 	f, err := os.Open(path)
 	if err != nil {
