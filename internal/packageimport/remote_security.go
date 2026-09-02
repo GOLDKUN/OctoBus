@@ -1,6 +1,7 @@
 package packageimport
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -108,6 +110,9 @@ func newRemoteHTTPClient(validate func(context.Context, string) error) *http.Cli
 	if validate == nil {
 		return client
 	}
+	// Do not let HTTP(S)_PROXY redirect a validated request to an
+	// unvalidated destination through an external proxy.
+	transport.Proxy = nil
 	transport.DialContext = safeRemoteDialContext(validate)
 	client.CheckRedirect = func(req *http.Request, _ []*http.Request) error {
 		return validate(req.Context(), req.URL.String())
@@ -141,6 +146,102 @@ func safeRemoteDialContext(validate func(context.Context, string) error) func(co
 		}
 		return nil, fmt.Errorf("unable to connect to allowed address for %s", host)
 	}
+}
+
+// validatedGitProxy forces the git subprocess to use the target policy while
+// retaining the original hostname for HTTPS certificate verification.
+type validatedGitProxy struct {
+	listener  net.Listener
+	ctx       context.Context
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+func startValidatedGitProxy(ctx context.Context) (*validatedGitProxy, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	proxy := &validatedGitProxy{listener: listener, ctx: ctx, done: make(chan struct{})}
+	go proxy.serve()
+	return proxy, nil
+}
+
+func (p *validatedGitProxy) URL() string {
+	return "http://" + p.listener.Addr().String()
+}
+
+func (p *validatedGitProxy) serve() {
+	defer close(p.done)
+	go func() {
+		select {
+		case <-p.ctx.Done():
+			_ = p.listener.Close()
+		case <-p.done:
+		}
+	}()
+	for {
+		conn, err := p.listener.Accept()
+		if err != nil {
+			return
+		}
+		go p.handle(conn)
+	}
+}
+
+func (p *validatedGitProxy) handle(client net.Conn) {
+	defer client.Close()
+	request, err := http.ReadRequest(bufio.NewReader(client))
+	if err != nil || request.Method != http.MethodConnect {
+		_, _ = io.WriteString(client, "HTTP/1.1 405 Method Not Allowed\\r\\nConnection: close\\r\\n\\r\\n")
+		return
+	}
+	remote, err := dialValidatedRemote(p.ctx, request.Host)
+	if err != nil {
+		_, _ = io.WriteString(client, "HTTP/1.1 403 Forbidden\\r\\nConnection: close\\r\\n\\r\\n")
+		return
+	}
+	defer remote.Close()
+	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\\r\\n\\r\\n"); err != nil {
+		return
+	}
+	go func() {
+		_, _ = io.Copy(remote, client)
+		_ = remote.Close()
+	}()
+	_, _ = io.Copy(client, remote)
+}
+
+func (p *validatedGitProxy) Close() error {
+	var err error
+	p.closeOnce.Do(func() { err = p.listener.Close() })
+	<-p.done
+	return err
+}
+
+func dialValidatedRemote(ctx context.Context, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	if err := DefaultRemoteTargetValidator(ctx, "https://"+net.JoinHostPort(host, port)); err != nil {
+		return nil, err
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &net.Dialer{}
+	for _, item := range ips {
+		if isForbiddenRemoteIP(item.IP) {
+			continue
+		}
+		conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(item.IP.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+	}
+	return nil, fmt.Errorf("unable to connect to allowed address for %s", host)
 }
 
 func downloadRemoteArchive(ctx context.Context, source, artifactPath string, validate func(context.Context, string) error) error {

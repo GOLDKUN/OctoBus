@@ -32,6 +32,17 @@ func TestDefaultRemoteTargetValidatorRejectsUnsupportedURLs(t *testing.T) {
 	}
 }
 
+func TestRemoteHTTPClientDisablesAmbientProxy(t *testing.T) {
+	client := newRemoteHTTPClient(DefaultRemoteTargetValidator)
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type = %T", client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("validated remote client inherited an ambient proxy")
+	}
+}
+
 func TestRemoteHTTPClientRevalidatesRedirects(t *testing.T) {
 	validator := func(_ context.Context, raw string) error {
 		if strings.HasSuffix(raw, "/internal") {
