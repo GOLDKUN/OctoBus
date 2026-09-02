@@ -19,6 +19,7 @@ import (
 const (
 	encryptedSecretPrefix = "octobus-secret-v1:"
 	secretKeyEnv          = "OCTOBUS_SECRET_ENCRYPTION_KEY"
+	secretKeyFileEnv      = "OCTOBUS_SECRET_ENCRYPTION_KEY_FILE"
 	secretKeyBytes        = 32
 )
 
@@ -34,7 +35,10 @@ func loadSecretKey(dbPath string, hasEncryptedSecrets func() (bool, error)) ([]b
 		return randomSecretKey()
 	}
 
-	keyPath := dbPath + ".secret-key"
+	keyPath := os.Getenv(secretKeyFileEnv)
+	if keyPath == "" {
+		keyPath = dbPath + ".secret-key"
+	}
 	key, err := readSecretKeyFile(keyPath)
 	if err == nil {
 		return key, nil
