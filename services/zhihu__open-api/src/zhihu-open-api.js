@@ -261,8 +261,8 @@ const normalizeBaseUrl = (value) => {
   } catch {
     throw errorWithCode('INVALID_ARGUMENT', 'baseUrl must be a valid URL');
   }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw errorWithCode('INVALID_ARGUMENT', 'baseUrl must use http or https');
+  if (url.protocol !== 'https:') {
+    throw errorWithCode('INVALID_ARGUMENT', 'baseUrl must use https');
   }
   url.pathname = url.pathname.replace(/\/+$/, '');
   url.search = '';
@@ -284,28 +284,32 @@ const resolveCallContext = (ctx = {}) => ({
   req: ctx.req ?? ctx.request ?? {},
 });
 
-const resolveSettings = (ctx = {}) => ({
-  baseUrl: normalizeBaseUrl(ctx.config?.baseUrl ?? ctx.bindings?.baseUrl),
-  timeoutMs: normalizeTimeoutMs(
-    firstDefined(ctx.config?.timeoutMs, ctx.config?.timeout_ms, ctx.bindings?.timeoutMs, ctx.limits?.timeoutMs),
-    DEFAULT_TIMEOUT_MS,
-  ),
-  headers: (ctx.config?.headers ?? ctx.bindings?.headers) ?? {},
-  dispatcher: firstDefined(
+const resolveSettings = (ctx = {}) => {
+  const tlsInsecure = firstDefined(
     ctx.config?.skipTlsVerify,
     ctx.config?.tlsInsecureSkipVerify,
     ctx.config?.insecureSkipVerify,
     ctx.bindings?.skipTlsVerify,
     ctx.bindings?.tlsInsecureSkipVerify,
     ctx.bindings?.insecureSkipVerify,
-  ) === true
-    ? insecureTlsDispatcher
-    : undefined,
-  accessSecret: requiredString(ctx.secret?.accessSecret ?? ctx.secret?.access_secret, 'accessSecret'),
-  oauthToken: asString(ctx.secret?.oauthToken ?? ctx.secret?.oauth_token),
-  fetchImpl: ctx.fetchImpl ?? globalThis.fetch,
-  meta: ctx.meta ?? {},
-});
+  ) === true;
+  if (tlsInsecure) {
+    throw errorWithCode('INVALID_ARGUMENT', 'TLS certificate verification cannot be disabled');
+  }
+  return {
+    baseUrl: normalizeBaseUrl(ctx.config?.baseUrl ?? ctx.bindings?.baseUrl),
+    timeoutMs: normalizeTimeoutMs(
+      firstDefined(ctx.config?.timeoutMs, ctx.config?.timeout_ms, ctx.bindings?.timeoutMs, ctx.limits?.timeoutMs),
+      DEFAULT_TIMEOUT_MS,
+    ),
+    headers: (ctx.config?.headers ?? ctx.bindings?.headers) ?? {},
+    dispatcher: undefined,
+    accessSecret: requiredString(ctx.secret?.accessSecret ?? ctx.secret?.access_secret, 'accessSecret'),
+    oauthToken: asString(ctx.secret?.oauthToken ?? ctx.secret?.oauth_token),
+    fetchImpl: ctx.fetchImpl ?? globalThis.fetch,
+    meta: ctx.meta ?? {},
+  };
+};
 
 const resolveOauthToken = (settings, request = {}) => (
   asString(request.oauth_token ?? request.oauthToken) || settings.oauthToken
