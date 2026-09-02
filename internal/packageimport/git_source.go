@@ -227,6 +227,11 @@ func (i *Importer) prepareGitSource(ctx context.Context, rawSource, staging stri
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		return preparedSource{}, err
 	}
+	if i.RemoteTargetValidator != nil {
+		if err := i.RemoteTargetValidator(ctx, src.CredentialURL); err != nil {
+			return preparedSource{}, fmt.Errorf("validate Git remote: %w", err)
+		}
+	}
 	if err := runner.run(ctx, repoDir, "init", "--bare", "."); err != nil {
 		return preparedSource{}, err
 	}
@@ -318,7 +323,8 @@ func (r *gitRunner) run(ctx context.Context, dir string, args ...string) error {
 }
 
 func (r *gitRunner) output(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	gitArgs := append([]string{"-c", "http.followRedirects=false"}, args...)
+	cmd := exec.CommandContext(ctx, "git", gitArgs...)
 	cmd.Dir = dir
 	cmd.Env = r.env
 	var out strings.Builder
