@@ -13,9 +13,11 @@ import (
 )
 
 const (
-	FileName     = "access.log"
-	ContentType  = "application/x-ndjson"
-	DefaultLimit = 200
+	FileName               = "access.log"
+	ContentType            = "application/x-ndjson"
+	DefaultLimit           = 200
+	MaxFilterEntries       = 10_000
+	MaxResponseBytes int64 = 64 << 20
 )
 
 type Record struct {
@@ -95,8 +97,8 @@ type Filter struct {
 }
 
 func ReadFile(path string, filter Filter, w io.Writer) error {
-	if filter.Limit < 0 {
-		return fmt.Errorf("limit must be non-negative")
+	if err := validateFilterLimits(filter); err != nil {
+		return err
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -110,6 +112,9 @@ func ReadFile(path string, filter Filter, w io.Writer) error {
 }
 
 func FilterLines(r io.Reader, filter Filter, w io.Writer) error {
+	if err := validateFilterLimits(filter); err != nil {
+		return err
+	}
 	if filter.Limit < 0 {
 		return fmt.Errorf("limit must be non-negative")
 	}
@@ -181,6 +186,16 @@ func FilterLines(r io.Reader, filter Filter, w io.Writer) error {
 		if _, err := w.Write([]byte("\n")); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateFilterLimits(filter Filter) error {
+	if filter.Limit > MaxFilterEntries {
+		return fmt.Errorf("limit must not exceed %d", MaxFilterEntries)
+	}
+	if filter.Tail > MaxFilterEntries {
+		return fmt.Errorf("tail must not exceed %d", MaxFilterEntries)
 	}
 	return nil
 }
