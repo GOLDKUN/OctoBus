@@ -31,7 +31,7 @@ const mock = await startMockUpstream();
 const addr = `127.0.0.1:${await freePort()}`;
 const daemon = spawn(octobusBin, ["serve", "--addr", addr, "--data-dir", dataDir], {
   cwd: repoRoot,
-  env: { ...process.env, OCTOBUS_ADDR: addr, OCTOBUS_DATA_DIR: dataDir, NODE_TLS_REJECT_UNAUTHORIZED: "0" },
+  env: { ...process.env, OCTOBUS_ADDR: addr, OCTOBUS_DATA_DIR: dataDir, NODE_EXTRA_CA_CERTS: mock.caFile },
   stdio: ["ignore", "pipe", "pipe"],
 });
 
@@ -353,6 +353,7 @@ async function startMockUpstream() {
       return requests;
     },
     baseURL: `https://127.0.0.1:${address.port}`,
+    caFile: certPath,
     close: () => new Promise((resolve) => server.close(() => {
       fs.rmSync(tlsDir, { recursive: true, force: true });
       resolve();
