@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -44,6 +45,31 @@ func TestInstanceSecretsAreEncryptedAtRestAndReadableAcrossReopen(t *testing.T) 
 	}
 	if string(got.SecretJSON) != string(plain) {
 		t.Fatalf("decrypted secret = %s", got.SecretJSON)
+	}
+}
+
+func TestOpenFailsWhenSecretKeyIsMissingForEncryptedData(t *testing.T) {
+	t.Setenv(secretKeyEnv, "")
+	dbPath := t.TempDir() + "/octobus.db"
+	ctx := context.Background()
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertService(ctx, domain.Service{ID: "secret-service", Name: "Secret Service"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertInstance(ctx, domain.Instance{ID: "secret-instance", ServiceID: "secret-service", Name: "Instance", SecretJSON: []byte(`{"token":"value"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(dbPath + ".secret-key"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dbPath); err == nil || !strings.Contains(err.Error(), "encrypted instance secrets exist") {
+		t.Fatalf("missing secret key error = %v", err)
 	}
 }
 

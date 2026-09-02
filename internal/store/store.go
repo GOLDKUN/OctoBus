@@ -46,10 +46,6 @@ func Open(path string) (*Store, error) {
 			return nil, err
 		}
 	}
-	secretKey, err := loadSecretKey(path)
-	if err != nil {
-		return nil, err
-	}
 	dbPath := path
 	if path != ":memory:" {
 		dbPath = "file:" + filepath.ToSlash(path)
@@ -68,7 +64,23 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	secretKey, err := loadSecretKey(path, func() (bool, error) {
+		var encrypted int
+		err := db.QueryRowContext(context.Background(), `SELECT EXISTS(SELECT 1 FROM instances WHERE substr(secret_json, 1, ?) = ?)`, len(encryptedSecretPrefix), encryptedSecretPrefix).Scan(&encrypted)
+		if err != nil && strings.Contains(err.Error(), "no such table") {
+			return false, nil
+		}
+		return encrypted == 1, err
+	})
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	s := &Store{db: db, secretKey: secretKey}
+	if err := s.validateSecretKey(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := s.Migrate(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
