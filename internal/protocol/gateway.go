@@ -1640,11 +1640,11 @@ func (g *Gateway) invokeOnDemand(ctx context.Context, item store.ExposedMethod, 
 	if ctx.Err() == context.DeadlineExceeded {
 		return nil, status.Error(codes.DeadlineExceeded, "on-demand invoke timed out")
 	}
-	if stdout.Truncated || stderr.Truncated {
-		return nil, status.Error(codes.ResourceExhausted, "on-demand process output exceeded limit")
-	}
 	if err != nil {
 		return nil, onDemandProcessError(err, stderr.String())
+	}
+	if stdout.Truncated || stderr.Truncated {
+		return nil, status.Error(codes.ResourceExhausted, "on-demand process output exceeded limit")
 	}
 	if err := g.validateOnDemandResponse(item, stdout.Bytes()); err != nil {
 		return nil, err
@@ -1653,7 +1653,7 @@ func (g *Gateway) invokeOnDemand(ctx context.Context, item store.ExposedMethod, 
 }
 
 type boundedBuffer struct {
-	bytes.Buffer
+	buf       bytes.Buffer
 	Limit     int64
 	Truncated bool
 }
@@ -1664,13 +1664,21 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	if int64(len(p)) > b.Limit {
-		_, _ = b.Buffer.Write(p[:int(b.Limit)])
+		_, _ = b.buf.Write(p[:int(b.Limit)])
 		b.Limit = 0
 		b.Truncated = true
 		return len(p), nil
 	}
 	b.Limit -= int64(len(p))
-	return b.Buffer.Write(p)
+	return b.buf.Write(p)
+}
+
+func (b *boundedBuffer) Bytes() []byte {
+	return b.buf.Bytes()
+}
+
+func (b *boundedBuffer) String() string {
+	return b.buf.String()
 }
 
 func (g *Gateway) acquireOnDemandSlot(ctx context.Context) bool {

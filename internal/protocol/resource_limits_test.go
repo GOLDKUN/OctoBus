@@ -3,6 +3,8 @@ package protocol
 import (
 	"bytes"
 	"context"
+	"io"
+	"strings"
 	"testing"
 )
 
@@ -24,6 +26,17 @@ func TestBoundedBufferCapsOutputWithoutBlockingProcess(t *testing.T) {
 	}
 	if !bytes.Equal(buf.Bytes(), []byte("over")) {
 		t.Fatalf("buffer grew after truncation: %q", buf.Bytes())
+	}
+}
+
+func TestBoundedBufferCapsIoCopyFastPath(t *testing.T) {
+	var buf boundedBuffer
+	buf.Limit = 4
+	if _, err := io.Copy(&buf, strings.NewReader("oversized")); err != nil {
+		t.Fatal(err)
+	}
+	if !buf.Truncated || !bytes.Equal(buf.Bytes(), []byte("over")) {
+		t.Fatalf("io.Copy output = %q truncated=%v", buf.Bytes(), buf.Truncated)
 	}
 }
 
