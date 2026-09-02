@@ -192,7 +192,8 @@ func (p *validatedGitProxy) serve() {
 
 func (p *validatedGitProxy) handle(client net.Conn) {
 	defer client.Close()
-	request, err := http.ReadRequest(bufio.NewReader(client))
+	reader := bufio.NewReader(client)
+	request, err := http.ReadRequest(reader)
 	if err != nil || request.Method != http.MethodConnect {
 		_, _ = io.WriteString(client, "HTTP/1.1 405 Method Not Allowed\\r\\nConnection: close\\r\\n\\r\\n")
 		return
@@ -207,7 +208,7 @@ func (p *validatedGitProxy) handle(client net.Conn) {
 		return
 	}
 	go func() {
-		_, _ = io.Copy(remote, client)
+		_, _ = io.Copy(remote, io.MultiReader(reader, client))
 		_ = remote.Close()
 	}()
 	_, _ = io.Copy(client, remote)
