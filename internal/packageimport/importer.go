@@ -663,7 +663,7 @@ func (i *Importer) prepareSource(ctx context.Context, opts Options, staging stri
 			err = untarGz(artifactPath, packageDir)
 		}
 		if err != nil {
-			return preparedSource{}, err
+			return preparedSource{}, fmt.Errorf("extract remote package %q: %w", redactedRemoteArchiveSource(source), err)
 		}
 		packageDir = normalizePackageDir(packageDir)
 	}
@@ -860,7 +860,7 @@ func downloadRemoteArchive(ctx context.Context, source, artifactPath string) err
 	closeErr := out.Close()
 	if copyErr != nil {
 		_ = os.Remove(artifactPath)
-		return copyErr
+		return fmt.Errorf("download remote package %q: %w", redactedRemoteArchiveSource(source), copyErr)
 	}
 	if closeErr != nil {
 		_ = os.Remove(artifactPath)
