@@ -116,10 +116,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := addColumnIfMissing(ctx, s.db, "capset_methods", "mcp_tool_key", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE capset_methods SET mcp_tool_key = (
-		SELECT ci.capset_id || char(31) || capset_methods.mcp_tool_name
-		FROM capset_instances ci WHERE ci.id = capset_methods.capset_instance_id
-	) WHERE mcp_tool_name <> '' AND mcp_tool_key = ''`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE capset_methods SET mcp_tool_key = capset_instance_id || char(31) || mcp_tool_name WHERE mcp_tool_name <> '' AND mcp_tool_key = ''`); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS uq_capset_methods_mcp_tool_key ON capset_methods(mcp_tool_key) WHERE mcp_tool_key <> ''`); err != nil {
@@ -807,11 +804,7 @@ func (s *Store) AddCapsetMethod(ctx context.Context, method domain.CapsetMethod)
 
 	toolKey := ""
 	if method.MCPToolName != "" {
-		var capsetID string
-		if err := tx.QueryRowContext(ctx, `SELECT capset_id FROM capset_instances WHERE id = ?`, method.CapsetInstanceID).Scan(&capsetID); err != nil {
-			return err
-		}
-		toolKey = capsetID + mcpToolKeySeparator + method.MCPToolName
+		toolKey = method.CapsetInstanceID + mcpToolKeySeparator + method.MCPToolName
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO capset_methods (id, capset_instance_id, method_full_name, rest_alias, mcp_tool_name, mcp_tool_key, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, method.ID, method.CapsetInstanceID, method.MethodFullName, method.RestAlias, method.MCPToolName, toolKey, boolInt(method.Enabled), formatTime(method.CreatedAt), formatTime(method.UpdatedAt))
 	if err != nil {
