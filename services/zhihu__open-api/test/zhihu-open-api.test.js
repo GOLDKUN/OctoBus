@@ -54,7 +54,7 @@ test('requires an Access Secret before any request is issued', async () => {
   );
   assert.throws(
     () => _test.resolveSettings({ config: { baseUrl: 'http://example' }, secret: { accessSecret: 'a' } }),
-    /baseUrl must use https or loopback http/,
+    /baseUrl must use https/,
   );
   assert.throws(
     () => _test.normalizeBaseUrl('not a url'),
@@ -520,6 +520,12 @@ test('respects config timeouts, custom headers, and legacy aliases', async () =>
     () => _test.resolveSettings({ config: { baseUrl: 'https://example', skipTlsVerify: true }, secret: { accessSecret: 'a' } }),
     /TLS certificate verification cannot be disabled/,
   );
+  for (const alias of ['tlsInsecureSkipVerify', 'insecureSkipVerify']) {
+    assert.throws(
+      () => _test.resolveSettings({ config: { baseUrl: 'https://example', [alias]: true }, secret: { accessSecret: 'a' } }),
+      /TLS certificate verification cannot be disabled/,
+    );
+  }
   const settings = _test.resolveSettings({
     config: { baseUrl: 'https://x', timeoutMs: 2000, headers: { a: 'b' } },
     secret: { accessSecret: 's' },

@@ -6,7 +6,7 @@
     "baseUrl": {
       "type": "string",
       "format": "uri",
-      "pattern": "^(https://|http://(127\\.0\\.0\\.1|\\[::1\\])(?::|/))",
+      "pattern": "^https://",
       "default": "https://developer.zhihu.com",
       "description": "Zhihu Open Platform root URL."
     },

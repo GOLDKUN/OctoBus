@@ -1,4 +1,4 @@
-import { GrpcError, createTlsDispatcher, grpcCodeFor, normalizeTimeoutMs } from '@chaitin-ai/octobus-sdk';
+import { GrpcError, grpcCodeFor, normalizeTimeoutMs } from '@chaitin-ai/octobus-sdk';
 
 // ---------------------------------------------------------------------------
 // Method table
@@ -26,7 +26,6 @@ export const METHODS = {
 // ---------------------------------------------------------------------------
 const DEFAULT_BASE_URL = 'https://developer.zhihu.com';
 const DEFAULT_TIMEOUT_MS = 10_000;
-const insecureTlsDispatcher = createTlsDispatcher(true);
 
 const SEARCH_DB_VALUES = ['all', 'realtime', 'static'];
 const SCOPE_VALUES = ['all', 'created', 'subscribed'];
@@ -261,8 +260,8 @@ const normalizeBaseUrl = (value) => {
   } catch {
     throw errorWithCode('INVALID_ARGUMENT', 'baseUrl must be a valid URL');
   }
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && (url.hostname === '127.0.0.1' || url.hostname === '[::1]'))) {
-    throw errorWithCode('INVALID_ARGUMENT', 'baseUrl must use https or loopback http');
+  if (url.protocol !== 'https:') {
+    throw errorWithCode('INVALID_ARGUMENT', 'baseUrl must use https');
   }
   url.pathname = url.pathname.replace(/\/+$/, '');
   url.search = '';
@@ -285,14 +284,14 @@ const resolveCallContext = (ctx = {}) => ({
 });
 
 const resolveSettings = (ctx = {}) => {
-  const tlsInsecure = firstDefined(
+  const tlsInsecure = [
     ctx.config?.skipTlsVerify,
     ctx.config?.tlsInsecureSkipVerify,
     ctx.config?.insecureSkipVerify,
     ctx.bindings?.skipTlsVerify,
     ctx.bindings?.tlsInsecureSkipVerify,
     ctx.bindings?.insecureSkipVerify,
-  ) === true;
+  ].some((value) => value === true);
   if (tlsInsecure) {
     throw errorWithCode('INVALID_ARGUMENT', 'TLS certificate verification cannot be disabled');
   }
@@ -519,7 +518,6 @@ export const _test = {
   errorWithCode,
   firstDefined,
   hasOwn,
-  insecureTlsDispatcher,
   isTimeoutError,
   logInfo,
   mapErrorCode,
