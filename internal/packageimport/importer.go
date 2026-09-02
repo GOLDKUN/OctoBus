@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"octobus/internal/descriptors"
 	"octobus/internal/domain"
@@ -27,6 +28,8 @@ import (
 type Importer struct {
 	DataDir string
 	Store   *store.Store
+
+	importMu sync.Mutex
 }
 
 type Options struct {
@@ -132,12 +135,16 @@ func (i *Importer) Import(ctx context.Context, opts Options) (Result, error) {
 	if opts.Source == "" {
 		return Result{}, errors.New("service package source is required")
 	}
+	i.importMu.Lock()
+	defer i.importMu.Unlock()
+
 	serviceDir := filepath.Join(i.DataDir, "artifacts", "services", opts.ServiceID)
-	staging := filepath.Join(i.DataDir, "artifacts", "services", ".staging-"+opts.ServiceID)
-	if err := os.RemoveAll(staging); err != nil {
+	stagingBase := filepath.Join(i.DataDir, "artifacts", "services")
+	if err := os.MkdirAll(stagingBase, 0o755); err != nil {
 		return Result{}, err
 	}
-	if err := os.MkdirAll(staging, 0o755); err != nil {
+	staging, err := os.MkdirTemp(stagingBase, ".staging-"+opts.ServiceID+"-")
+	if err != nil {
 		return Result{}, err
 	}
 	defer os.RemoveAll(staging)
@@ -369,15 +376,19 @@ func (i *Importer) ImportRecursive(ctx context.Context, opts Options) (Recursive
 	if opts.Name != "" {
 		return RecursiveResult{}, errors.New("name cannot be used with recursive import")
 	}
+	i.importMu.Lock()
+	defer i.importMu.Unlock()
+
 	baseSource, _, err := splitSourceServiceRoot(opts.Source)
 	if err != nil {
 		return RecursiveResult{}, err
 	}
-	staging := filepath.Join(i.DataDir, "artifacts", "services", ".staging-recursive-import")
-	if err := os.RemoveAll(staging); err != nil {
+	stagingBase := filepath.Join(i.DataDir, "artifacts", "services")
+	if err := os.MkdirAll(stagingBase, 0o755); err != nil {
 		return RecursiveResult{}, err
 	}
-	if err := os.MkdirAll(staging, 0o755); err != nil {
+	staging, err := os.MkdirTemp(stagingBase, ".staging-recursive-")
+	if err != nil {
 		return RecursiveResult{}, err
 	}
 	defer os.RemoveAll(staging)
@@ -1502,8 +1513,11 @@ func replaceServiceDir(serviceDir, preparedDir string) (func() error, func() err
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return nil, nil, err
 	}
-	backupDir := filepath.Join(parent, "."+filepath.Base(serviceDir)+".previous")
-	if err := os.RemoveAll(backupDir); err != nil {
+	backupDir, err := os.MkdirTemp(parent, "."+filepath.Base(serviceDir)+".previous-")
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := os.Remove(backupDir); err != nil {
 		return nil, nil, err
 	}
 	hadPrevious := false
