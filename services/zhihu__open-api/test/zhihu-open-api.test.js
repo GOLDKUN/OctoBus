@@ -54,7 +54,7 @@ test('requires an Access Secret before any request is issued', async () => {
   );
   assert.throws(
     () => _test.resolveSettings({ config: { baseUrl: 'http://example' }, secret: { accessSecret: 'a' } }),
-    /baseUrl must use https/,
+    /baseUrl must use https or loopback http/,
   );
   assert.throws(
     () => _test.normalizeBaseUrl('not a url'),
