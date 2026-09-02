@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -187,7 +188,7 @@ func initializeAdminAuth(ctx context.Context, st *store.Store) error {
 	}
 	secret := os.Getenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN")
 	if secret == "" {
-		return nil
+		return errors.New("admin token authentication is not initialized; set OCTOBUS_BOOTSTRAP_ADMIN_TOKEN before starting the daemon")
 	}
 	_, err = st.AddAdminToken(ctx, domain.AdminToken{ID: "bootstrap-admin", Name: "Bootstrap admin"}, secret)
 	return err

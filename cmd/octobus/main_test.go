@@ -32,6 +32,12 @@ func TestMain(m *testing.M) {
 		runCmdHelper()
 		return
 	}
+	if os.Getenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN") == "" {
+		if err := os.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "test-bootstrap-token"); err != nil {
+			panic(err)
+		}
+		defer os.Unsetenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN")
+	}
 	os.Exit(m.Run())
 }
 
@@ -59,6 +65,18 @@ func TestInitializeAdminAuthBootstrapsOnlyWhenStoreIsEmpty(t *testing.T) {
 	}
 	if !ok {
 		t.Fatal("bootstrap token was not usable")
+	}
+}
+
+func TestInitializeAdminAuthFailsClosedWithoutBootstrapToken(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "octobus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "")
+	if err := initializeAdminAuth(context.Background(), st); err == nil || !strings.Contains(err.Error(), "OCTOBUS_BOOTSTRAP_ADMIN_TOKEN") {
+		t.Fatalf("missing bootstrap token error = %v", err)
 	}
 }
 
