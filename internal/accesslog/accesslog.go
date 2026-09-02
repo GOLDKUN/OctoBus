@@ -191,6 +191,12 @@ func FilterLines(r io.Reader, filter Filter, w io.Writer) error {
 }
 
 func validateFilterLimits(filter Filter) error {
+	if filter.Limit < 0 {
+		return fmt.Errorf("limit must be non-negative")
+	}
+	if filter.Tail < 0 {
+		return fmt.Errorf("tail must be non-negative")
+	}
 	if filter.Limit > MaxFilterEntries {
 		return fmt.Errorf("limit must not exceed %d", MaxFilterEntries)
 	}
