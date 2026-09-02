@@ -222,7 +222,7 @@ func (i *Importer) prepareGitSource(ctx context.Context, rawSource, staging stri
 	var gitProxy *validatedGitProxy
 	var proxyURL string
 	if i.RemoteTargetValidator != nil {
-		gitProxy, err = startValidatedGitProxy(ctx)
+		gitProxy, err = startValidatedGitProxy(ctx, i.RemoteTargetValidator)
 		if err != nil {
 			return preparedSource{}, fmt.Errorf("start Git validation proxy: %w", err)
 		}

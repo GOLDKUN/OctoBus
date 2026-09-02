@@ -153,16 +153,17 @@ func safeRemoteDialContext(validate func(context.Context, string) error) func(co
 type validatedGitProxy struct {
 	listener  net.Listener
 	ctx       context.Context
+	validate  func(context.Context, string) error
 	done      chan struct{}
 	closeOnce sync.Once
 }
 
-func startValidatedGitProxy(ctx context.Context) (*validatedGitProxy, error) {
+func startValidatedGitProxy(ctx context.Context, validate func(context.Context, string) error) (*validatedGitProxy, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
 	}
-	proxy := &validatedGitProxy{listener: listener, ctx: ctx, done: make(chan struct{})}
+	proxy := &validatedGitProxy{listener: listener, ctx: ctx, validate: validate, done: make(chan struct{})}
 	go proxy.serve()
 	return proxy, nil
 }
@@ -196,7 +197,7 @@ func (p *validatedGitProxy) handle(client net.Conn) {
 		_, _ = io.WriteString(client, "HTTP/1.1 405 Method Not Allowed\\r\\nConnection: close\\r\\n\\r\\n")
 		return
 	}
-	remote, err := dialValidatedRemote(p.ctx, request.Host)
+	remote, err := dialValidatedRemote(p.ctx, request.Host, p.validate)
 	if err != nil {
 		_, _ = io.WriteString(client, "HTTP/1.1 403 Forbidden\\r\\nConnection: close\\r\\n\\r\\n")
 		return
@@ -219,12 +220,15 @@ func (p *validatedGitProxy) Close() error {
 	return err
 }
 
-func dialValidatedRemote(ctx context.Context, address string) (net.Conn, error) {
+func dialValidatedRemote(ctx context.Context, address string, validate func(context.Context, string) error) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
 	}
-	if err := DefaultRemoteTargetValidator(ctx, "https://"+net.JoinHostPort(host, port)); err != nil {
+	if validate == nil {
+		validate = DefaultRemoteTargetValidator
+	}
+	if err := validate(ctx, "https://"+net.JoinHostPort(host, port)); err != nil {
 		return nil, err
 	}
 	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
