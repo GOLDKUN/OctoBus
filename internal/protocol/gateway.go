@@ -57,9 +57,16 @@ type Gateway struct {
 	conns         map[string]*grpc.ClientConn
 	mcpToolsCache map[string][]map[string]any
 	connectCache  map[string]http.Handler
+
+	onDemandOnce  sync.Once
+	onDemandSlots chan struct{}
 }
 
-const DefaultMaxRequestBytes int64 = 1 << 20
+const (
+	DefaultMaxRequestBytes int64 = 1 << 20
+	maxOnDemandConcurrent        = 32
+	maxOnDemandOutputBytes int64 = 8 << 20
+)
 
 type Catalog struct {
 	CapsetID    string                  `json:"capset_id"`
@@ -1561,6 +1568,10 @@ func (g *Gateway) invokeOnDemand(ctx context.Context, item store.ExposedMethod, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	if !g.acquireOnDemandSlot(ctx) {
+		return nil, status.Error(codes.ResourceExhausted, "on-demand invocation capacity exhausted")
+	}
+	defer g.releaseOnDemandSlot()
 
 	workdir := filepath.Join(dataDir, "instances", item.Instance.ID)
 	tmpParent := filepath.Join(workdir, "tmp")
@@ -1620,12 +1631,17 @@ func (g *Gateway) invokeOnDemand(ctx context.Context, item store.ExposedMethod, 
 		"OCTOBUS_DESCRIPTOR_SHA256="+item.Service.DescriptorSHA256,
 	)
 	cmd.Stdin = bytes.NewReader(req)
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr boundedBuffer
+	stdout.Limit = maxOnDemandOutputBytes
+	stderr.Limit = maxOnDemandOutputBytes
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
 	if ctx.Err() == context.DeadlineExceeded {
 		return nil, status.Error(codes.DeadlineExceeded, "on-demand invoke timed out")
+	}
+	if stdout.Truncated || stderr.Truncated {
+		return nil, status.Error(codes.ResourceExhausted, "on-demand process output exceeded limit")
 	}
 	if err != nil {
 		return nil, onDemandProcessError(err, stderr.String())
@@ -1634,6 +1650,45 @@ func (g *Gateway) invokeOnDemand(ctx context.Context, item store.ExposedMethod, 
 		return nil, err
 	}
 	return stdout.Bytes(), nil
+}
+
+type boundedBuffer struct {
+	bytes.Buffer
+	Limit     int64
+	Truncated bool
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	if b.Limit <= 0 {
+		b.Truncated = true
+		return len(p), nil
+	}
+	if int64(len(p)) > b.Limit {
+		_, _ = b.Buffer.Write(p[:int(b.Limit)])
+		b.Limit = 0
+		b.Truncated = true
+		return len(p), nil
+	}
+	b.Limit -= int64(len(p))
+	return b.Buffer.Write(p)
+}
+
+func (g *Gateway) acquireOnDemandSlot(ctx context.Context) bool {
+	g.onDemandOnce.Do(func() {
+		g.onDemandSlots = make(chan struct{}, maxOnDemandConcurrent)
+	})
+	select {
+	case g.onDemandSlots <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	default:
+		return false
+	}
+}
+
+func (g *Gateway) releaseOnDemandSlot() {
+	<-g.onDemandSlots
 }
 
 func secretReadFile(secret []byte) (*os.File, func(), error) {
