@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -18,6 +19,33 @@ func TestGatewayCacheEntriesExpireAndInvalidateTogether(t *testing.T) {
 	gateway.mu.Unlock()
 	if len(gateway.mcpToolsCache) != 0 || len(gateway.connectCache) != 0 {
 		t.Fatalf("expired gateway cache entries remain: mcp=%d connect=%d", len(gateway.mcpToolsCache), len(gateway.connectCache))
+	}
+}
+
+func TestGatewayPruneRemovesOldestEntriesWithinCapacity(t *testing.T) {
+	gateway := &Gateway{mcpToolsCache: make(map[string][]map[string]any), mcpCacheAt: make(map[string]time.Time)}
+	for i := 0; i < gatewayCacheMaxEntries+1; i++ {
+		key := fmt.Sprintf("key-%d", i)
+		gateway.mcpToolsCache[key] = []map[string]any{{"name": key}}
+		gateway.mcpCacheAt[key] = time.Unix(int64(i), 0)
+	}
+	gateway.pruneGatewayCachesLocked()
+	if len(gateway.mcpToolsCache) != gatewayCacheMaxEntries {
+		t.Fatalf("cache entries = %d, want %d", len(gateway.mcpToolsCache), gatewayCacheMaxEntries)
+	}
+	if _, ok := gateway.mcpToolsCache["key-0"]; ok {
+		t.Fatal("oldest cache entry was not pruned")
+	}
+}
+
+func TestGatewayPruneAdvancesWhenTimestampMetadataIsMissing(t *testing.T) {
+	gateway := &Gateway{mcpToolsCache: make(map[string][]map[string]any)}
+	for i := 0; i < gatewayCacheMaxEntries+1; i++ {
+		gateway.mcpToolsCache[fmt.Sprintf("key-%d", i)] = nil
+	}
+	gateway.pruneGatewayCachesLocked()
+	if len(gateway.mcpToolsCache) != gatewayCacheMaxEntries {
+		t.Fatalf("cache entries = %d, want %d", len(gateway.mcpToolsCache), gatewayCacheMaxEntries)
 	}
 }
 
