@@ -35,6 +35,33 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestInitializeAdminAuthBootstrapsOnlyWhenStoreIsEmpty(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "octobus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "bootstrap-secret")
+	if err := initializeAdminAuth(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+	requires, err := st.AdminRequiresToken(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !requires {
+		t.Fatal("bootstrap token was not persisted")
+	}
+	ok, err := st.VerifyAdminToken(context.Background(), "bootstrap-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("bootstrap token was not usable")
+	}
+}
+
 func TestRootAddrFlagOverridesAdminCommands(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/admin/v1/status" {

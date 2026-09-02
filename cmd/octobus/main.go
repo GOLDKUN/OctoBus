@@ -17,6 +17,7 @@ import (
 	"octobus/internal/admin"
 	"octobus/internal/cli"
 	"octobus/internal/daemonlog"
+	"octobus/internal/domain"
 	"octobus/internal/packageimport"
 	"octobus/internal/protocol"
 	"octobus/internal/server"
@@ -125,7 +126,10 @@ func serve(opts serveOptions) error {
 	if err := startupInventory(ctx, logger, st); err != nil {
 		return err
 	}
-	adminServer := &admin.Server{Store: st, Importer: &packageimport.Importer{DataDir: dataDir, Store: st}, Supervisor: sup, Gateway: gateway, AccessLogPath: filepath.Join(dataDir, accesslog.FileName), Logger: logger}
+	if err := initializeAdminAuth(ctx, st); err != nil {
+		return fmt.Errorf("initialize admin authentication: %w", err)
+	}
+	adminServer := &admin.Server{Store: st, Importer: &packageimport.Importer{DataDir: dataDir, Store: st}, Supervisor: sup, Gateway: gateway, AccessLogPath: filepath.Join(dataDir, accesslog.FileName), Logger: logger, RequireAdminToken: true}
 	grpcServer := protocol.GRPCServer(gateway)
 	publicServer := admin.NewHTTPServer(opts.addr, h2c.NewHandler(server.CombinedHandler(adminServer.Handler(), grpcServer, gateway), &http2.Server{}))
 	publicListener, err := net.Listen("tcp", opts.addr)
@@ -171,6 +175,22 @@ func shutdownSupervisor(logger *slog.Logger, sup *supervisor.Supervisor) {
 	if err := sup.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("daemon_supervisor_shutdown_failed", "error", err)
 	}
+}
+
+func initializeAdminAuth(ctx context.Context, st *store.Store) error {
+	requires, err := st.AdminRequiresToken(ctx)
+	if err != nil {
+		return err
+	}
+	if requires {
+		return nil
+	}
+	secret := os.Getenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN")
+	if secret == "" {
+		return nil
+	}
+	_, err = st.AddAdminToken(ctx, domain.AdminToken{ID: "bootstrap-admin", Name: "Bootstrap admin"}, secret)
+	return err
 }
 
 func logStartupInventory(ctx context.Context, logger *slog.Logger, st *store.Store) error {
