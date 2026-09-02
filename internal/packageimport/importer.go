@@ -31,24 +31,38 @@ type Importer struct {
 	Store   *store.Store
 
 	importMu    sync.Mutex
-	importLocks map[string]*sync.Mutex
+	importLocks map[string]*serviceImportLock
 }
 
 const staleImportDirAge = 24 * time.Hour
 
+type serviceImportLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
 func (i *Importer) lockService(serviceID string) func() {
 	i.importMu.Lock()
 	if i.importLocks == nil {
-		i.importLocks = make(map[string]*sync.Mutex)
+		i.importLocks = make(map[string]*serviceImportLock)
 	}
 	lock := i.importLocks[serviceID]
 	if lock == nil {
-		lock = &sync.Mutex{}
+		lock = &serviceImportLock{}
 		i.importLocks[serviceID] = lock
 	}
+	lock.refs++
 	i.importMu.Unlock()
-	lock.Lock()
-	return lock.Unlock
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		i.importMu.Lock()
+		lock.refs--
+		if lock.refs == 0 && i.importLocks[serviceID] == lock {
+			delete(i.importLocks, serviceID)
+		}
+		i.importMu.Unlock()
+	}
 }
 
 func sweepStaleImportDirs(root string) error {
