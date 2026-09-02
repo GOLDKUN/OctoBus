@@ -186,12 +186,29 @@ func (s *Supervisor) UpdateConfig(ctx context.Context, instanceID string, config
 			return domain.Instance{}, err
 		}
 	}
+	configPath := filepath.Join(s.InstanceWorkdir(instanceID), "config.json")
+	previousConfig, readErr := os.ReadFile(configPath)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return domain.Instance{}, readErr
+	}
 	if err := s.writeInstanceConfig(instanceID, config); err != nil {
 		return domain.Instance{}, err
 	}
 	inst.ConfigJSON = config
 	inst.ConfigSHA256 = domain.ConfigHash(config)
 	if err := s.Store.UpsertInstance(ctx, inst); err != nil {
+		var restoreErr error
+		if readErr == nil {
+			restoreErr = s.writeInstanceConfig(instanceID, previousConfig)
+		} else {
+			restoreErr = os.Remove(configPath)
+			if errors.Is(restoreErr, os.ErrNotExist) {
+				restoreErr = nil
+			}
+		}
+		if restoreErr != nil {
+			return domain.Instance{}, fmt.Errorf("persist config: %w; restore previous config: %v", err, restoreErr)
+		}
 		return domain.Instance{}, err
 	}
 	s.logger().Info("instance_config_updated", "instance_id", instanceID, "config_sha256", inst.ConfigSHA256, "restart", restart)
@@ -634,7 +651,28 @@ func (s *Supervisor) writeInstanceConfig(instanceID string, config []byte) error
 	if err := os.MkdirAll(workdir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(workdir, "config.json"), config, 0o600)
+	tmp, err := os.CreateTemp(workdir, ".config.json-")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(config); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, filepath.Join(workdir, "config.json"))
 }
 
 func secretReadFile(secret []byte) (*os.File, func(), error) {
