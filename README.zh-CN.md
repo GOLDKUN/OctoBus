@@ -65,7 +65,7 @@ Docker 镜像内包含 `octobus` binary，以及常规 service 导入和 instanc
 ```bash
 docker run --rm \
   -p 9000:9000 \
-  -e OCTOBUS_BOOTSTRAP_ADMIN_TOKEN \
+  -e OCTOBUS_BOOTSTRAP_ADMIN_TOKEN=... \
   -v octobus-data:/var/lib/octobus \
   ghcr.io/chaitin/octobus:latest
 ```
@@ -408,9 +408,9 @@ instance 时继续通过文件和 fd 传递 config/secret。
 
 守护进程启用控制面前必须有 Admin Token。
 
-本地开发请使用 `octobus serve --dev`，且必须绑定 loopback（默认 `127.0.0.1:9000`）：会写入固定 token `octobus-dev-admin-token` 并打印警告。随后设置 `OCTOBUS_ADMIN_TOKEN`（或写入 `.env` / `.octobus.yml`），CLI 才能通过鉴权。监听非 loopback 地址时 `--dev` 会拒绝启动。
+本地开发请使用 `octobus serve --dev`，且必须绑定 loopback（默认 `127.0.0.1:9000`）：会写入固定 token `octobus-dev-admin-token` 并打印警告。随后设置 `OCTOBUS_ADMIN_TOKEN`（或写入 `.env` / `.octobus.yml`），CLI 才能通过鉴权。监听非 loopback 地址时 `--dev` 会拒绝启动，应改用 `OCTOBUS_BOOTSTRAP_ADMIN_TOKEN`。
 
-不要在生产环境使用 `--dev`，也不要复用曾经用 `--dev` 初始化过的数据目录。该公开 token 一旦写入，即使设置了 `OCTOBUS_BOOTSTRAP_ADMIN_TOKEN`，不带 `--dev` 也会拒绝启动。生产请换全新数据目录。
+不要在生产环境使用 `--dev`。曾经用 `--dev` 初始化过的数据目录会一直保留该公开 token；之后启动会打印警告，`OCTOBUS_BOOTSTRAP_ADMIN_TOKEN` 也不会替换它。生产请换全新数据目录。
 
 生产环境的全新数据目录，首次启动前设置高熵值 `OCTOBUS_BOOTSTRAP_ADMIN_TOKEN`。该值会被哈希，API 不会回显明文；完成引导后从进程环境中移除，后续 token 通过已鉴权的 Admin API 管理。空数据目录既没有 `--dev` 也没有 bootstrap token 时，守护进程会直接退出，而不是启动一个匿名开放的控制面。
 

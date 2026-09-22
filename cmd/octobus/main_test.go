@@ -219,7 +219,7 @@ func TestInitializeAdminAuthDevRejectsNonLoopback(t *testing.T) {
 	defer st.Close()
 	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "")
 	err = initializeAdminAuth(context.Background(), st, adminAuthOptions{dev: true, addr: "0.0.0.0:9000"})
-	if err == nil || !strings.Contains(err.Error(), "loopback") {
+	if err == nil || !strings.Contains(err.Error(), "loopback") || !strings.Contains(err.Error(), "OCTOBUS_BOOTSTRAP_ADMIN_TOKEN") {
 		t.Fatalf("non-loopback --dev error = %v", err)
 	}
 	requires, err := st.AdminRequiresToken(context.Background())
@@ -231,7 +231,7 @@ func TestInitializeAdminAuthDevRejectsNonLoopback(t *testing.T) {
 	}
 }
 
-func TestInitializeAdminAuthRejectsLeftoverDevTokenWithoutDevFlag(t *testing.T) {
+func TestInitializeAdminAuthKeepsLeftoverDevTokenWithoutDevFlag(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "octobus.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -242,9 +242,8 @@ func TestInitializeAdminAuthRejectsLeftoverDevTokenWithoutDevFlag(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "production-secret")
-	err = initializeAdminAuth(context.Background(), st, adminAuthOptions{})
-	if err == nil || !strings.Contains(err.Error(), "development admin token") {
-		t.Fatalf("leftover dev token error = %v", err)
+	if err := initializeAdminAuth(context.Background(), st, adminAuthOptions{}); err != nil {
+		t.Fatal(err)
 	}
 	ok, err := st.VerifyAdminToken(context.Background(), "production-secret")
 	if err != nil {
@@ -252,6 +251,13 @@ func TestInitializeAdminAuthRejectsLeftoverDevTokenWithoutDevFlag(t *testing.T) 
 	}
 	if ok {
 		t.Fatal("bootstrap env must not replace a leftover development token")
+	}
+	ok, err = st.VerifyAdminToken(context.Background(), devAdminTokenSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("development admin token should remain usable")
 	}
 }
 
@@ -320,7 +326,7 @@ func TestServeRejectsDevNonLoopbackBeforeStartup(t *testing.T) {
 			return nil
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "loopback") {
+	if err == nil || !strings.Contains(err.Error(), "loopback") || !strings.Contains(err.Error(), "OCTOBUS_BOOTSTRAP_ADMIN_TOKEN") {
 		t.Fatalf("expected loopback error, got %v", err)
 	}
 	if inventoryCalled {
@@ -328,6 +334,37 @@ func TestServeRejectsDevNonLoopbackBeforeStartup(t *testing.T) {
 	}
 	if _, statErr := os.Stat(dataDir); !os.IsNotExist(statErr) {
 		t.Fatalf("non-loopback --dev created data dir: %v", statErr)
+	}
+}
+
+func TestServeWarnsLeftoverDevTokenBeforeRecover(t *testing.T) {
+	dataDir := t.TempDir()
+	st, err := store.Open(filepath.Join(dataDir, "octobus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "")
+	if err := initializeAdminAuth(context.Background(), st, adminAuthOptions{dev: true, addr: "127.0.0.1:9000", warn: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	var warn bytes.Buffer
+	sawWarning := false
+	err = serve(serveOptions{
+		dataDir: dataDir,
+		addr:    "127.0.0.1:0",
+		stderr:  &warn,
+		startupInventory: func(context.Context, *slog.Logger, *store.Store) error {
+			sawWarning = strings.Contains(warn.String(), "id="+devAdminTokenID)
+			return errors.New("stop after inventory")
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "stop after inventory") {
+		t.Fatalf("expected inventory stop, got %v", err)
+	}
+	if !sawWarning {
+		t.Fatalf("missing leftover dev token warning before recover: %q", warn.String())
 	}
 }
 

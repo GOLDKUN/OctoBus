@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -117,6 +118,11 @@ func serve(opts serveOptions) error {
 		return err
 	}
 	defer st.Close()
+	if !opts.dev {
+		if err := warnIfDevAdminToken(context.Background(), st, stderr); err != nil {
+			return err
+		}
+	}
 	accessLogger, err := accesslog.Open(dataDir)
 	if err != nil {
 		return fmt.Errorf("open access log: %w", err)
@@ -212,16 +218,6 @@ func initializeAdminAuth(ctx context.Context, st *store.Store, opts adminAuthOpt
 		return err
 	}
 	if requires {
-		if opts.dev {
-			return nil
-		}
-		ok, err := st.VerifyAdminToken(ctx, devAdminTokenSecret)
-		if err != nil {
-			return err
-		}
-		if ok {
-			return errors.New("data directory still has the development admin token; restart with --dev on a loopback address, or use a fresh data directory before production")
-		}
 		return nil
 	}
 	secret := os.Getenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN")
@@ -253,8 +249,23 @@ func requireDevLoopback(addr string) error {
 		return fmt.Errorf("dev mode: parse listen address %q: %w", addr, err)
 	}
 	if !ok {
-		return fmt.Errorf("dev mode requires a loopback listen address, got %q", addr)
+		return fmt.Errorf("dev mode requires a loopback listen address, got %q; use OCTOBUS_BOOTSTRAP_ADMIN_TOKEN instead of --dev", addr)
 	}
+	return nil
+}
+
+func warnIfDevAdminToken(ctx context.Context, st *store.Store, warn io.Writer) error {
+	_, err := st.GetAdminToken(ctx, devAdminTokenID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if warn == nil {
+		warn = os.Stderr
+	}
+	fmt.Fprintf(warn, "warning: data directory has development admin token id=%s; do not use this token in production\n", devAdminTokenID)
 	return nil
 }
 
