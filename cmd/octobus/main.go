@@ -52,24 +52,40 @@ func newRootCommand(adminCLI *cli.CLI) *cobra.Command {
 
 func newServeCommand(addr *string) *cobra.Command {
 	var dataDir string
+	var dev bool
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the Octobus daemon",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return serve(serveOptions{dataDir: dataDir, addr: *addr})
+			return serve(serveOptions{dataDir: dataDir, addr: *addr, dev: dev})
 		},
 	}
 	cmd.Flags().StringVar(&dataDir, "data-dir", defaultDataDir(), "octobus data directory")
+	cmd.Flags().BoolVar(&dev, "dev", false, "seed a fixed development admin token when none exists (not for production)")
 	return cmd
 }
 
 type serveOptions struct {
 	dataDir          string
 	addr             string
+	dev              bool
 	stderr           io.Writer
 	logger           *slog.Logger
 	startupInventory func(context.Context, *slog.Logger, *store.Store) error
+}
+
+const (
+	bootstrapAdminTokenID   = "bootstrap-admin"
+	bootstrapAdminTokenName = "Bootstrap admin"
+	devAdminTokenID         = "dev-admin"
+	devAdminTokenName       = "Development admin"
+	devAdminTokenSecret     = "octobus-dev-admin-token"
+)
+
+type adminAuthOptions struct {
+	dev  bool
+	warn io.Writer
 }
 
 func serve(opts serveOptions) error {
@@ -127,7 +143,7 @@ func serve(opts serveOptions) error {
 	if err := startupInventory(ctx, logger, st); err != nil {
 		return err
 	}
-	if err := initializeAdminAuth(ctx, st); err != nil {
+	if err := initializeAdminAuth(ctx, st, adminAuthOptions{dev: opts.dev, warn: stderr}); err != nil {
 		return fmt.Errorf("initialize admin authentication: %w", err)
 	}
 	adminServer := &admin.Server{Store: st, Importer: &packageimport.Importer{DataDir: dataDir, Store: st}, Supervisor: sup, Gateway: gateway, AccessLogPath: filepath.Join(dataDir, accesslog.FileName), Logger: logger, RequireAdminToken: true}
@@ -178,7 +194,7 @@ func shutdownSupervisor(logger *slog.Logger, sup *supervisor.Supervisor) {
 	}
 }
 
-func initializeAdminAuth(ctx context.Context, st *store.Store) error {
+func initializeAdminAuth(ctx context.Context, st *store.Store, opts adminAuthOptions) error {
 	requires, err := st.AdminRequiresToken(ctx)
 	if err != nil {
 		return err
@@ -187,14 +203,26 @@ func initializeAdminAuth(ctx context.Context, st *store.Store) error {
 		return nil
 	}
 	secret := os.Getenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN")
-	if secret == "" {
-		return errors.New("admin token authentication is not initialized; set OCTOBUS_BOOTSTRAP_ADMIN_TOKEN before starting the daemon")
+	if secret != "" {
+		_, err = st.AddAdminToken(ctx, domain.AdminToken{ID: bootstrapAdminTokenID, Name: bootstrapAdminTokenName}, secret)
+		if err != nil {
+			return fmt.Errorf("provision bootstrap admin token: %w", err)
+		}
+		return nil
 	}
-	_, err = st.AddAdminToken(ctx, domain.AdminToken{ID: "bootstrap-admin", Name: "Bootstrap admin"}, secret)
-	if err != nil {
-		return fmt.Errorf("provision bootstrap admin token: %w", err)
+	if opts.dev {
+		_, err = st.AddAdminToken(ctx, domain.AdminToken{ID: devAdminTokenID, Name: devAdminTokenName}, devAdminTokenSecret)
+		if err != nil {
+			return fmt.Errorf("provision development admin token: %w", err)
+		}
+		warn := opts.warn
+		if warn == nil {
+			warn = os.Stderr
+		}
+		fmt.Fprintf(warn, "warning: --dev seeded a fixed admin token; do not use this mode in production\nexport OCTOBUS_ADMIN_TOKEN=%s\n", devAdminTokenSecret)
+		return nil
 	}
-	return nil
+	return errors.New("admin token authentication is not initialized; set OCTOBUS_BOOTSTRAP_ADMIN_TOKEN or start with --dev")
 }
 
 func logStartupInventory(ctx context.Context, logger *slog.Logger, st *store.Store) error {

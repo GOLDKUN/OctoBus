@@ -49,7 +49,7 @@ func TestInitializeAdminAuthBootstrapsOnlyWhenStoreIsEmpty(t *testing.T) {
 	defer st.Close()
 
 	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "bootstrap-secret")
-	if err := initializeAdminAuth(context.Background(), st); err != nil {
+	if err := initializeAdminAuth(context.Background(), st, adminAuthOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	requires, err := st.AdminRequiresToken(context.Background())
@@ -75,7 +75,7 @@ func TestInitializeAdminAuthFailsClosedWithoutBootstrapToken(t *testing.T) {
 	}
 	defer st.Close()
 	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "")
-	if err := initializeAdminAuth(context.Background(), st); err == nil || !strings.Contains(err.Error(), "OCTOBUS_BOOTSTRAP_ADMIN_TOKEN") {
+	if err := initializeAdminAuth(context.Background(), st, adminAuthOptions{}); err == nil || !strings.Contains(err.Error(), "OCTOBUS_BOOTSTRAP_ADMIN_TOKEN") {
 		t.Fatalf("missing bootstrap token error = %v", err)
 	}
 	requires, err := st.AdminRequiresToken(context.Background())
@@ -101,7 +101,7 @@ func TestInitializeAdminAuthIgnoresEnvWhenTokenAlreadyConfigured(t *testing.T) {
 	// A fresh bootstrap token in the environment must be ignored once
 	// authentication is already configured: no error, no duplicate token.
 	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "bootstrap-secret")
-	if err := initializeAdminAuth(ctx, st); err != nil {
+	if err := initializeAdminAuth(ctx, st, adminAuthOptions{}); err != nil {
 		t.Fatalf("re-initialization with existing token failed: %v", err)
 	}
 	ok, err := st.VerifyAdminToken(ctx, "existing-secret")
@@ -119,8 +119,102 @@ func TestInitializeAdminAuthIgnoresEnvWhenTokenAlreadyConfigured(t *testing.T) {
 
 	// An unset bootstrap token is likewise fine when a token already exists.
 	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "")
-	if err := initializeAdminAuth(ctx, st); err != nil {
+	if err := initializeAdminAuth(ctx, st, adminAuthOptions{}); err != nil {
 		t.Fatalf("initialization without env failed when a token exists: %v", err)
+	}
+}
+
+func TestInitializeAdminAuthDevSeedsFixedToken(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "octobus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "")
+	var warn bytes.Buffer
+	if err := initializeAdminAuth(context.Background(), st, adminAuthOptions{dev: true, warn: &warn}); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := st.VerifyAdminToken(context.Background(), devAdminTokenSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("dev token was not usable")
+	}
+	if !strings.Contains(warn.String(), "do not use this mode in production") {
+		t.Fatalf("missing production warning: %q", warn.String())
+	}
+	if !strings.Contains(warn.String(), "OCTOBUS_ADMIN_TOKEN="+devAdminTokenSecret) {
+		t.Fatalf("missing export hint: %q", warn.String())
+	}
+}
+
+func TestInitializeAdminAuthDevDoesNotOverrideExistingToken(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "octobus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	if _, err := st.AddAdminToken(ctx, domain.AdminToken{ID: "manual-admin", Name: "Manual admin"}, "existing-secret"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "")
+	var warn bytes.Buffer
+	if err := initializeAdminAuth(ctx, st, adminAuthOptions{dev: true, warn: &warn}); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := st.VerifyAdminToken(ctx, "existing-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("existing admin token stopped working")
+	}
+	if ok, err := st.VerifyAdminToken(ctx, devAdminTokenSecret); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatal("dev token was inserted even though authentication was already configured")
+	}
+	if warn.Len() != 0 {
+		t.Fatalf("unexpected warning when a token already exists: %q", warn.String())
+	}
+}
+
+func TestInitializeAdminAuthDevPrefersBootstrapEnv(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "octobus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "bootstrap-secret")
+	var warn bytes.Buffer
+	if err := initializeAdminAuth(context.Background(), st, adminAuthOptions{dev: true, warn: &warn}); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := st.VerifyAdminToken(context.Background(), "bootstrap-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("bootstrap token was not usable")
+	}
+	if ok, err := st.VerifyAdminToken(context.Background(), devAdminTokenSecret); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatal("dev token was inserted even though bootstrap env was set")
+	}
+	if warn.Len() != 0 {
+		t.Fatalf("unexpected warning when bootstrap env is set: %q", warn.String())
+	}
+}
+
+func TestServeCommandExposesDevFlag(t *testing.T) {
+	addr := "127.0.0.1:9000"
+	cmd := newServeCommand(&addr)
+	if cmd.Flags().Lookup("dev") == nil {
+		t.Fatal("serve command is missing --dev")
 	}
 }
 
