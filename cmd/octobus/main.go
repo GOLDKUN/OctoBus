@@ -119,7 +119,7 @@ func serve(opts serveOptions) error {
 	}
 	defer st.Close()
 	if !opts.dev {
-		if err := warnIfDevAdminToken(context.Background(), st, stderr); err != nil {
+		if err := checkLeftoverDevAdminToken(context.Background(), st, opts.addr, stderr); err != nil {
 			return err
 		}
 	}
@@ -254,7 +254,7 @@ func requireDevLoopback(addr string) error {
 	return nil
 }
 
-func warnIfDevAdminToken(ctx context.Context, st *store.Store, warn io.Writer) error {
+func checkLeftoverDevAdminToken(ctx context.Context, st *store.Store, addr string, warn io.Writer) error {
 	_, err := st.GetAdminToken(ctx, devAdminTokenID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
@@ -266,6 +266,13 @@ func warnIfDevAdminToken(ctx context.Context, st *store.Store, warn io.Writer) e
 		warn = os.Stderr
 	}
 	fmt.Fprintf(warn, "warning: data directory has development admin token id=%s; do not use this token in production\n", devAdminTokenID)
+	ok, err := listenAddrIsLoopback(addr)
+	if err != nil {
+		return fmt.Errorf("parse listen address %q: %w", addr, err)
+	}
+	if !ok {
+		return fmt.Errorf("development admin token cannot be used with a non-loopback listen address, got %q; bind loopback or use a fresh data directory with OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", addr)
+	}
 	return nil
 }
 

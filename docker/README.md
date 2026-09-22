@@ -32,8 +32,9 @@ development on the host should use `octobus serve --dev` instead.
 
 Do not reuse a data volume that was first started with `--dev`. That writes
 the well-known development token into the store; later starts print a warning
-and `OCTOBUS_BOOTSTRAP_ADMIN_TOKEN` will not replace it. Use a fresh volume
-for production. Do not bake a default token into the image.
+and `OCTOBUS_BOOTSTRAP_ADMIN_TOKEN` will not replace it. A leftover
+development token is refused on a non-loopback listen address. Use a fresh
+volume for production. Do not bake a default token into the image.
 
 When using a host bind mount instead of a named volume, make sure the mounted
 directory is writable by the container user.

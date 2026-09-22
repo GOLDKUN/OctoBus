@@ -368,6 +368,40 @@ func TestServeWarnsLeftoverDevTokenBeforeRecover(t *testing.T) {
 	}
 }
 
+func TestServeRejectsLeftoverDevTokenOnNonLoopbackBeforeRecover(t *testing.T) {
+	dataDir := t.TempDir()
+	st, err := store.Open(filepath.Join(dataDir, "octobus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "")
+	if err := initializeAdminAuth(context.Background(), st, adminAuthOptions{dev: true, addr: "127.0.0.1:9000", warn: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	var warn bytes.Buffer
+	inventoryCalled := false
+	err = serve(serveOptions{
+		dataDir: dataDir,
+		addr:    "0.0.0.0:9000",
+		stderr:  &warn,
+		startupInventory: func(context.Context, *slog.Logger, *store.Store) error {
+			inventoryCalled = true
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "non-loopback") || !strings.Contains(err.Error(), "OCTOBUS_BOOTSTRAP_ADMIN_TOKEN") {
+		t.Fatalf("leftover dev token on non-loopback error = %v", err)
+	}
+	if !strings.Contains(warn.String(), "id="+devAdminTokenID) {
+		t.Fatalf("missing leftover dev token warning: %q", warn.String())
+	}
+	if inventoryCalled {
+		t.Fatal("leftover dev token on non-loopback still ran startup inventory")
+	}
+}
+
 func TestServeReturnsPublicBindError(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
