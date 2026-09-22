@@ -73,9 +73,9 @@ for normal service import and instance startup flows.
 ```bash
 docker run --rm \
   -p 9000:9000 \
+  -e OCTOBUS_BOOTSTRAP_ADMIN_TOKEN \
   -v octobus-data:/var/lib/octobus \
-  ghcr.io/chaitin/octobus:latest \
-  serve --dev
+  ghcr.io/chaitin/octobus:latest
 ```
 
 The container listens on `0.0.0.0:9000` by default and stores daemon state under
@@ -411,9 +411,11 @@ The SDK also reads the same variable from `.env` in the current working director
 
 The daemon requires an Admin Token before enabling the control plane.
 
-For local development, start with `octobus serve --dev`. This seeds a fixed admin token `octobus-dev-admin-token` and prints a warning. Then set `OCTOBUS_ADMIN_TOKEN` (or put the same value in `.env` / `.octobus.yml`) so CLI commands can authenticate. Do not use `--dev` in production.
+For local development, start with `octobus serve --dev` on a loopback address (the default is `127.0.0.1:9000`). This seeds a fixed admin token `octobus-dev-admin-token` and prints a warning. Then set `OCTOBUS_ADMIN_TOKEN` (or put the same value in `.env` / `.octobus.yml`) so CLI commands can authenticate. `--dev` refuses to start if the daemon would listen on a non-loopback address.
 
-On a new or upgraded production data directory, set `OCTOBUS_BOOTSTRAP_ADMIN_TOKEN` to a high-entropy value for the first startup. The value is hashed and is not returned by the API; remove it from the process environment after bootstrap and manage subsequent tokens through the authenticated Admin API. If neither `--dev` nor a bootstrap token is provided on an empty data directory, the daemon exits instead of starting an unauthenticated control plane.
+Do not use `--dev` in production, and do not reuse a data directory that was first started with `--dev`. Once that well-known token exists, `OCTOBUS_BOOTSTRAP_ADMIN_TOKEN` is ignored; start a fresh data directory instead.
+
+On a new production data directory, set `OCTOBUS_BOOTSTRAP_ADMIN_TOKEN` to a high-entropy value for the first startup. The value is hashed and is not returned by the API; remove it from the process environment after bootstrap and manage subsequent tokens through the authenticated Admin API. If neither `--dev` nor a bootstrap token is provided on an empty data directory, the daemon exits instead of starting an unauthenticated control plane.
 
 ## Development
 

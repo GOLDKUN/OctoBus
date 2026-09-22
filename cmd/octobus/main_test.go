@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -132,7 +133,7 @@ func TestInitializeAdminAuthDevSeedsFixedToken(t *testing.T) {
 	defer st.Close()
 	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "")
 	var warn bytes.Buffer
-	if err := initializeAdminAuth(context.Background(), st, adminAuthOptions{dev: true, warn: &warn}); err != nil {
+	if err := initializeAdminAuth(context.Background(), st, adminAuthOptions{dev: true, addr: "127.0.0.1:9000", warn: &warn}); err != nil {
 		t.Fatal(err)
 	}
 	ok, err := st.VerifyAdminToken(context.Background(), devAdminTokenSecret)
@@ -162,7 +163,7 @@ func TestInitializeAdminAuthDevDoesNotOverrideExistingToken(t *testing.T) {
 	}
 	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "")
 	var warn bytes.Buffer
-	if err := initializeAdminAuth(ctx, st, adminAuthOptions{dev: true, warn: &warn}); err != nil {
+	if err := initializeAdminAuth(ctx, st, adminAuthOptions{dev: true, addr: "127.0.0.1:9000", warn: &warn}); err != nil {
 		t.Fatal(err)
 	}
 	ok, err := st.VerifyAdminToken(ctx, "existing-secret")
@@ -190,7 +191,7 @@ func TestInitializeAdminAuthDevPrefersBootstrapEnv(t *testing.T) {
 	defer st.Close()
 	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "bootstrap-secret")
 	var warn bytes.Buffer
-	if err := initializeAdminAuth(context.Background(), st, adminAuthOptions{dev: true, warn: &warn}); err != nil {
+	if err := initializeAdminAuth(context.Background(), st, adminAuthOptions{dev: true, addr: "127.0.0.1:9000", warn: &warn}); err != nil {
 		t.Fatal(err)
 	}
 	ok, err := st.VerifyAdminToken(context.Background(), "bootstrap-secret")
@@ -207,6 +208,74 @@ func TestInitializeAdminAuthDevPrefersBootstrapEnv(t *testing.T) {
 	}
 	if warn.Len() != 0 {
 		t.Fatalf("unexpected warning when bootstrap env is set: %q", warn.String())
+	}
+}
+
+func TestInitializeAdminAuthDevRejectsNonLoopback(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "octobus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "")
+	err = initializeAdminAuth(context.Background(), st, adminAuthOptions{dev: true, addr: "0.0.0.0:9000"})
+	if err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("non-loopback --dev error = %v", err)
+	}
+	requires, err := st.AdminRequiresToken(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requires {
+		t.Fatal("failed --dev bind check must not persist a token")
+	}
+}
+
+func TestInitializeAdminAuthRejectsLeftoverDevTokenWithoutDevFlag(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "octobus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "")
+	if err := initializeAdminAuth(context.Background(), st, adminAuthOptions{dev: true, addr: "127.0.0.1:9000", warn: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN", "production-secret")
+	err = initializeAdminAuth(context.Background(), st, adminAuthOptions{})
+	if err == nil || !strings.Contains(err.Error(), "development admin token") {
+		t.Fatalf("leftover dev token error = %v", err)
+	}
+	ok, err := st.VerifyAdminToken(context.Background(), "production-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("bootstrap env must not replace a leftover development token")
+	}
+}
+
+func TestListenAddrIsLoopback(t *testing.T) {
+	cases := []struct {
+		addr string
+		want bool
+	}{
+		{addr: "127.0.0.1:9000", want: true},
+		{addr: "localhost:9000", want: true},
+		{addr: "[::1]:9000", want: true},
+		{addr: "0.0.0.0:9000", want: false},
+		{addr: ":9000", want: false},
+		{addr: "[::]:9000", want: false},
+		{addr: "192.168.1.10:9000", want: false},
+	}
+	for _, tc := range cases {
+		got, err := listenAddrIsLoopback(tc.addr)
+		if err != nil {
+			t.Fatalf("listenAddrIsLoopback(%q) error: %v", tc.addr, err)
+		}
+		if got != tc.want {
+			t.Fatalf("listenAddrIsLoopback(%q) = %v, want %v", tc.addr, got, tc.want)
+		}
 	}
 }
 

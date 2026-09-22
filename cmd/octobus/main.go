@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -62,7 +63,7 @@ func newServeCommand(addr *string) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&dataDir, "data-dir", defaultDataDir(), "octobus data directory")
-	cmd.Flags().BoolVar(&dev, "dev", false, "seed a fixed development admin token when none exists (not for production)")
+	cmd.Flags().BoolVar(&dev, "dev", false, "seed a fixed development admin token when none exists; requires a loopback listen address (not for production)")
 	return cmd
 }
 
@@ -85,6 +86,7 @@ const (
 
 type adminAuthOptions struct {
 	dev  bool
+	addr string
 	warn io.Writer
 }
 
@@ -143,7 +145,7 @@ func serve(opts serveOptions) error {
 	if err := startupInventory(ctx, logger, st); err != nil {
 		return err
 	}
-	if err := initializeAdminAuth(ctx, st, adminAuthOptions{dev: opts.dev, warn: stderr}); err != nil {
+	if err := initializeAdminAuth(ctx, st, adminAuthOptions{dev: opts.dev, addr: opts.addr, warn: stderr}); err != nil {
 		return fmt.Errorf("initialize admin authentication: %w", err)
 	}
 	adminServer := &admin.Server{Store: st, Importer: &packageimport.Importer{DataDir: dataDir, Store: st}, Supervisor: sup, Gateway: gateway, AccessLogPath: filepath.Join(dataDir, accesslog.FileName), Logger: logger, RequireAdminToken: true}
@@ -195,11 +197,26 @@ func shutdownSupervisor(logger *slog.Logger, sup *supervisor.Supervisor) {
 }
 
 func initializeAdminAuth(ctx context.Context, st *store.Store, opts adminAuthOptions) error {
+	if opts.dev {
+		if err := requireDevLoopback(opts.addr); err != nil {
+			return err
+		}
+	}
 	requires, err := st.AdminRequiresToken(ctx)
 	if err != nil {
 		return err
 	}
 	if requires {
+		if opts.dev {
+			return nil
+		}
+		ok, err := st.VerifyAdminToken(ctx, devAdminTokenSecret)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return errors.New("data directory still has the development admin token; restart with --dev on a loopback address, or use a fresh data directory before production (OCTOBUS_BOOTSTRAP_ADMIN_TOKEN is ignored once a token exists)")
+		}
 		return nil
 	}
 	secret := os.Getenv("OCTOBUS_BOOTSTRAP_ADMIN_TOKEN")
@@ -223,6 +240,35 @@ func initializeAdminAuth(ctx context.Context, st *store.Store, opts adminAuthOpt
 		return nil
 	}
 	return errors.New("admin token authentication is not initialized; set OCTOBUS_BOOTSTRAP_ADMIN_TOKEN or start with --dev")
+}
+
+func requireDevLoopback(addr string) error {
+	ok, err := listenAddrIsLoopback(addr)
+	if err != nil {
+		return fmt.Errorf("dev mode: parse listen address %q: %w", addr, err)
+	}
+	if !ok {
+		return fmt.Errorf("dev mode requires a loopback listen address, got %q", addr)
+	}
+	return nil
+}
+
+func listenAddrIsLoopback(addr string) (bool, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false, err
+	}
+	if host == "" {
+		return false, nil
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true, nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false, nil
+	}
+	return ip.IsLoopback(), nil
 }
 
 func logStartupInventory(ctx context.Context, logger *slog.Logger, st *store.Store) error {

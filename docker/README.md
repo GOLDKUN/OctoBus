@@ -19,13 +19,21 @@ docker build -f docker/Dockerfile -t octobus:dev .
 Run the daemon:
 
 ```bash
-docker run --rm -p 9000:9000 -v octobus-data:/var/lib/octobus octobus:dev serve --dev
+docker run --rm \
+  -p 9000:9000 \
+  -e OCTOBUS_BOOTSTRAP_ADMIN_TOKEN \
+  -v octobus-data:/var/lib/octobus \
+  octobus:dev
 ```
 
-`--dev` seeds the fixed local admin token `octobus-dev-admin-token`. Pass
-`-e OCTOBUS_ADMIN_TOKEN=octobus-dev-admin-token` on CLI containers. Production
-deployments should use `-e OCTOBUS_BOOTSTRAP_ADMIN_TOKEN=...` instead of
-`--dev`; do not bake a default token into the image.
+The image listens on `0.0.0.0:9000` by default, so do not pass `serve --dev`
+with a published port: `--dev` only starts on a loopback address. Local
+development on the host should use `octobus serve --dev` instead.
+
+Do not reuse a data volume that was first started with `--dev`. That writes
+the well-known development token into the store, and later
+`OCTOBUS_BOOTSTRAP_ADMIN_TOKEN` values are ignored. Use a fresh volume for
+production. Do not bake a default token into the image.
 
 When using a host bind mount instead of a named volume, make sure the mounted
 directory is writable by the container user.
