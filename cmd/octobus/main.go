@@ -91,6 +91,11 @@ type adminAuthOptions struct {
 }
 
 func serve(opts serveOptions) error {
+	if opts.dev {
+		if err := requireDevLoopback(opts.addr); err != nil {
+			return err
+		}
+	}
 	stderr := opts.stderr
 	if stderr == nil {
 		stderr = os.Stderr
@@ -215,7 +220,7 @@ func initializeAdminAuth(ctx context.Context, st *store.Store, opts adminAuthOpt
 			return err
 		}
 		if ok {
-			return errors.New("data directory still has the development admin token; restart with --dev on a loopback address, or use a fresh data directory before production (OCTOBUS_BOOTSTRAP_ADMIN_TOKEN is ignored once a token exists)")
+			return errors.New("data directory still has the development admin token; restart with --dev on a loopback address, or use a fresh data directory before production")
 		}
 		return nil
 	}

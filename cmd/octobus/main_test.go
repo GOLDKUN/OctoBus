@@ -308,6 +308,29 @@ func TestRootAddrFlagOverridesAdminCommands(t *testing.T) {
 	}
 }
 
+func TestServeRejectsDevNonLoopbackBeforeStartup(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "should-not-exist")
+	inventoryCalled := false
+	err := serve(serveOptions{
+		dataDir: dataDir,
+		addr:    "0.0.0.0:9000",
+		dev:     true,
+		startupInventory: func(context.Context, *slog.Logger, *store.Store) error {
+			inventoryCalled = true
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("expected loopback error, got %v", err)
+	}
+	if inventoryCalled {
+		t.Fatal("non-loopback --dev still ran startup inventory")
+	}
+	if _, statErr := os.Stat(dataDir); !os.IsNotExist(statErr) {
+		t.Fatalf("non-loopback --dev created data dir: %v", statErr)
+	}
+}
+
 func TestServeReturnsPublicBindError(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

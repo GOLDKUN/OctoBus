@@ -31,9 +31,9 @@ with a published port: `--dev` only starts on a loopback address. Local
 development on the host should use `octobus serve --dev` instead.
 
 Do not reuse a data volume that was first started with `--dev`. That writes
-the well-known development token into the store, and later
-`OCTOBUS_BOOTSTRAP_ADMIN_TOKEN` values are ignored. Use a fresh volume for
-production. Do not bake a default token into the image.
+the well-known development token into the store. Later starts without `--dev`
+refuse to run even if `OCTOBUS_BOOTSTRAP_ADMIN_TOKEN` is set. Use a fresh
+volume for production. Do not bake a default token into the image.
 
 When using a host bind mount instead of a named volume, make sure the mounted
 directory is writable by the container user.
